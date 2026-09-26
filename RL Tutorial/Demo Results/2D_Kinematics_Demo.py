@@ -26,12 +26,13 @@ class PureKinematicGrid:
         self.velocity = np.array([0.0, 0.0])
         return (self.pos.copy(), self.velocity.copy())
 
-    def step(self, action):
+    def step(self, action, discrete_state):
         accel = self._action_to_accel[action]
+        pos, velocity = discrete_state
 
         # equations from integration
-        self.velocity = np.clip(self.velocity + (accel * self.dt), -self.v_max, self.v_max)
-        self.pos = np.clip(self.pos + (self.velocity * self.dt) + (0.5 * accel * (self.dt ** 2)), 0.0, self.grid_size - 1)
+        self.velocity = np.clip(velocity + (accel * self.dt), -self.v_max, self.v_max)
+        self.pos = np.clip(pos + (velocity * self.dt) + (0.5 * accel * (self.dt ** 2)), 0.0, self.grid_size - 1)
         
         if self.pos[0] in (0.0, self.grid_size - 1):
             self.velocity[0] = 0.0
@@ -69,17 +70,14 @@ class PureKinematicGrid:
         self.ax.set_xlabel('X Position')
         self.ax.set_ylabel('Y Position')
 
-        # Draw the grid
         for x in range(self.grid_size + 1):
             self.ax.plot([x, x], [0, self.grid_size], color='lightgray', linewidth=0.5)
         for y in range(self.grid_size + 1):
             self.ax.plot([0, self.grid_size], [y, y], color='lightgray', linewidth=0.5)
 
-        # Draw the agent
         agent_circle = plt.Circle((position[0], position[1]), 0.3, color='blue', alpha=0.7)
         self.ax.add_artist(agent_circle)
         
-
         plt.pause(0.1)
 
 if __name__ == "__main__":
@@ -90,7 +88,7 @@ if __name__ == "__main__":
 
     for _ in range(50):
         action = np.random.choice(list(env._action_to_accel.keys()))
-        position, velocity = env.step(action)
+        position, velocity = env.step(action, discrete_state)
         noisy_position = env.noise(position, pos_noise_std=0.1)
         discrete_state = env.discretize_state(noisy_position, velocity)
         env.render(discrete_state)
