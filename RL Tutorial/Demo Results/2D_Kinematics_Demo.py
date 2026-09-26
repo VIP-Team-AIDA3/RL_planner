@@ -40,16 +40,18 @@ class PureKinematicGrid:
             
         return (self.pos.copy(), self.velocity.copy())
 
-    def discretize_state(self, pos):
+    def discretize_state(self, pos, velocity):
         self.pos_discrete = np.clip(np.round(pos).astype(int), 0, self.grid_size - 1)
-        self.velocity_discrete = np.clip(np.round(self.velocity).astype(int), -self.v_max, self.v_max)
+        self.velocity_discrete = np.clip(np.round(velocity).astype(int), -self.v_max, self.v_max)
         return (self.pos_discrete.copy(), self.velocity_discrete.copy())
 
     def noise(self, pos, pos_noise_std=0.1):
         self.noisy_pos = pos + np.random.normal(0, pos_noise_std, size=pos.shape)
         return (self.noisy_pos.copy())
 
-    def render(self):
+    def render(self, discrete_state):
+        """Draw the discrete position and velocity supplied by the caller."""
+        position, velocity = discrete_state
         if self.fig is None or self.ax is None:
             self.fig, self.ax = plt.subplots()
             self.ax.set_xlim(0, self.grid_size)
@@ -74,9 +76,23 @@ class PureKinematicGrid:
             self.ax.plot([0, self.grid_size], [y, y], color='lightgray', linewidth=0.5)
 
         # Draw the agent
-        agent_circle = plt.Circle((self.pos[0], self.pos[1]), 0.3, color='blue', alpha=0.7)
+        agent_circle = plt.Circle((position[0], position[1]), 0.3, color='blue', alpha=0.7)
         self.ax.add_artist(agent_circle)
-        arrow_scale = 0.5
-        self.ax.arrow(self.pos[0], self.pos[1], self.velocity[0] * arrow_scale, self.velocity[1] * arrow_scale, head_width=0.2, head_length=0.3, fc='red', ec='red')
+        
 
-        plt.pause(0.1)
+        plt.pause(1)
+
+if __name__ == "__main__":
+    env = PureKinematicGrid(grid_size=20, v_max=3.0, a_max=1.0)
+    state = env.reset()
+    discrete_state = env.discretize_state(*state)
+    env.render(discrete_state)
+
+    for _ in range(50):
+        action = np.random.choice(list(env._action_to_accel.keys()))
+        position, velocity = env.step(action)
+        noisy_position = env.noise(position, pos_noise_std=0.1)
+        discrete_state = env.discretize_state(noisy_position, velocity)
+        env.render(discrete_state)
+
+    plt.show()
