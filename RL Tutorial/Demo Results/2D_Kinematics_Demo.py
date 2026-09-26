@@ -80,7 +80,7 @@ class PureKinematicGrid:
         self.ax.add_artist(agent_circle)
         
 
-        plt.pause(1)
+        plt.pause(0.1)
 
 if __name__ == "__main__":
     env = PureKinematicGrid(grid_size=20, v_max=3.0, a_max=1.0)
