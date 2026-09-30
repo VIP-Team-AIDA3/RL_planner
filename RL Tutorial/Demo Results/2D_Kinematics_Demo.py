@@ -8,12 +8,13 @@ from matplotlib.patches import Circle
 from matplotlib.lines import Line2D
 from enum import Enum
 
-class PureKinematicGrid:
-    def __init__(self, grid_size=20, v_max=3.0, a_max=1.0):
+class PureKinematicGrid(gym.Env):
+    def __init__(self, grid_size=20, v_max=3.0, a_max=1.0, grid_density=10):
         self.grid_size = grid_size
         self.v_max = v_max
         self.a_max = a_max
-        self.dt = 1.0
+        self.grid_density = grid_density # how many sub lines appear between whol integer values
+        self.dt = 1.0 / self.grid_density # time step changes based on the grid density
         
         self._action_to_accel = {
             0: np.array([0.0, self.a_max]),
@@ -48,6 +49,7 @@ class PureKinematicGrid:
             
         return (self.pos.copy(), self.velocity.copy())
 
+    #TODO: round to nearest 1 / grid density
     def discretize_state(self, pos, velocity):
         self.pos_discrete = np.clip(np.round(pos).astype(int), 0, self.grid_size - 1)
         self.velocity_discrete = np.clip(np.round(velocity).astype(int), -self.v_max, self.v_max)
@@ -77,9 +79,13 @@ class PureKinematicGrid:
         self.ax.set_xlabel('X Position')
         self.ax.set_ylabel('Y Position')
 
-        for x in range(self.grid_size + 1):
+        num_lines = (self.grid_size * self.grid_density) + 1
+        grid_points = np.linspace(0, self.grid_size, num_lines)
+
+        # Draw the dense grid
+        for x in grid_points:
             self.ax.plot([x, x], [0, self.grid_size], color='lightgray', linewidth=0.5)
-        for y in range(self.grid_size + 1):
+        for y in grid_points:
             self.ax.plot([0, self.grid_size], [y, y], color='lightgray', linewidth=0.5)
 
         agent_circle = plt.Circle((position[0], position[1]), 0.3, color='blue', alpha=0.7)
