@@ -14,7 +14,7 @@ class PureKinematicGrid(gym.Env):
         self.v_max = v_max
         self.a_max = a_max
         self.grid_density = grid_density # how many sub lines appear between whol integer values
-        self.dt = 1.0 / self.grid_density # time step changes based on the grid density
+        self.dt = 1 / self.grid_density #time step changes based on the grid density
         
         self._action_to_accel = {
             0: np.array([0.0, self.a_max]),
@@ -51,8 +51,11 @@ class PureKinematicGrid(gym.Env):
 
     #TODO: round to nearest 1 / grid density
     def discretize_state(self, pos, velocity):
-        self.pos_discrete = np.clip(np.round(pos).astype(int), 0, self.grid_size - 1)
-        self.velocity_discrete = np.clip(np.round(velocity).astype(int), -self.v_max, self.v_max)
+        quantized_pos = np.round(pos * self.grid_density) / self.grid_density
+        quantized_vel = np.round(velocity * self.grid_density) / self.grid_density
+        
+        self.pos_discrete = np.clip(quantized_pos, 0.0, self.grid_size - 1)
+        self.velocity_discrete = np.clip(quantized_vel, -self.v_max, self.v_max)
         return (self.pos_discrete.copy(), self.velocity_discrete.copy())
 
     def noise(self, pos, pos_noise_std=0.1):
@@ -94,7 +97,7 @@ class PureKinematicGrid(gym.Env):
         plt.pause(0.1)
 
 if __name__ == "__main__":
-    env = PureKinematicGrid(grid_size=20, v_max=3.0, a_max=1.0)
+    env = PureKinematicGrid(grid_size=20, v_max=50, a_max=50)
     state = env.reset()
     discrete_state = env.discretize_state(*state)
     env.render(discrete_state)
