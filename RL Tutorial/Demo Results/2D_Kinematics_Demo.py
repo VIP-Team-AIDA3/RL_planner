@@ -10,28 +10,32 @@ from enum import Enum
 from typing import Optional
 
 class PureKinematicGrid(gym.Env):
-    def __init__(self, grid_size=20, v_max=3.0, a_max=1.0, grid_density=10):
+    def __init__(self, grid_size=20, v_max=3.0, a_max=1.0, grid_density=10, lambda_accel=0.01,
+    lambda_smooth=0.05, num_a_values =10):
         self.grid_size = grid_size
         self.v_max = v_max
         self.a_max = a_max
         self.grid_density = grid_density # how many sub lines appear between whol integer values
         self.dt = 1 / self.grid_density #time step changes based on the grid density
-
+        self.lambda_accel = lambda_accel
+        self.lambda_smooth = lambda_smooth
+        self.num_a_values = num_a_values
         #TODO: Gym implementation
-        self.action_space = spaces.Discrete(5)
 
         lower_bounds = np.array([0.0, 0.0, -self.v_max, -self.v_max], dtype=np.float32)
         upper_bounds = np.array([self.grid_size - 1, self.grid_size - 1, self.v_max, self.v_max], dtype=np.float32)
         # tells the agent what the state space is bounded to
         self.observation_space = spaces.Box(low=lower_bounds, high=upper_bounds, shape=(4,), dtype=np.float32)
 
-        self._action_to_accel = {
-                    0: np.array([0.0, self.a_max]),
-                    1: np.array([self.a_max, 0.0]),
-                    2: np.array([0.0, -self.a_max]),
-                    3: np.array([-self.a_max, 0.0]),
-                    4: np.array([0.0, 0.0])
-                }
+        accel_values = np.linspace(-self.a_max, self.a_max, self.num_a_values)
+
+        self._action_to_accel = {}
+
+        for ax in accel_values:
+                for ay in accel_values:
+                        self._action_to_accel[len(self._action_to_accel)] = np.array([ax, ay], dtype=np.float32)
+
+        self.action_space = spaces.Discrete(len(self._action_to_accel))
 
         self.prev_accel = np.zeros(2, dtype=np.float32)
         self.state = np.array([self.grid_size / 2, self.grid_size / 2, 0.0, 0.0], dtype=np.float32)
@@ -78,12 +82,12 @@ class PureKinematicGrid(gym.Env):
         self.state = np.array([new_px, new_py, new_vx, new_vy], dtype=np.float32)
 
         # gets the previous acceleration for #TODO: the reward function
-        self.prev_accel = accel.copy()
-
         noisy_pos = self.noise(self.state[:2])
         discrete_state = self.discretize_state(noisy_pos, self.state[2:])
 
-        reward = 0.0 # placeholder reward
+        reward = self.compute_reward(accel)
+
+        self.prev_accel = accel.copy()
         terminated = False # True if agent reaches a goal or crashes
         truncated = False # True if max episode steps are reached
 
@@ -92,6 +96,21 @@ class PureKinematicGrid(gym.Env):
     def compute_reward(self, accel: np.ndarray) -> float:
         px, py, vx, vy = self.state
         current_pos = np.array([px, py], dtype=np.float32)
+        # add reward for accelerating too much as a penalty as it requires more energy for the drone 
+        # add reward for continousness of acceleration rather than abrupt discrete changes in acceleration
+        # as it is unrealistic to accelerate with a_max forward and suddenly go backward with -a_max 
+        accel_penalty = np.sum(accel ** 2)
+
+        delta_accel = accel - self.prev_accel
+        smoothness_penalty = np.sum(delta_accel ** 2)
+
+        reward = (
+            - self.lambda_accel * accel_penalty
+            - self.lambda_smooth * smoothness_penalty
+        )
+
+        return reward
+        
 
     def discretize_state(self, pos, velocity):
         quantized_pos = np.round(pos * self.grid_density) / self.grid_density
