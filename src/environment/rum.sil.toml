@@ -1,0 +1,160 @@
+# =============================================================================
+# Fixed-wing lockstep SIL with a PYTHON outer loop.
+#
+#   rumoca   : FixedWingPlant + SAFE inner loop (RumocaFixedWingFlight, mode=1)
+#   python   : CubControl.FixedWingOuterLoop, ported to outer_loop.py
+#
+#   rumoca ──PlantState (NED pose)──▶ outer_loop.py      UDP 127.0.0.1:4251
+#   outer_loop.py ──StickCommand──▶ rumoca              UDP 127.0.0.1:4250
+#
+# Same timing as the rumoca_fixed_wing "Autopilot" tab: the outer loop runs at
+# 50 Hz and the plant integrates each 20 ms interval in five 4 ms substeps
+# (max_advance_dt = 1/240 s -> ceil(0.02*240) = 5), like app.js.
+#
+# Start the Python side FIRST (it must be listening before rumoca's first
+# send), or just use ./run.sh which does that for you.
+#   python3 outer_loop.py &
+#   rumoca sim -c rum.sil.toml          # viewer: http://localhost:8080
+# =============================================================================
+
+# Plant + SAFE inner loop, verbatim from CogniPilot/rumoca_fixed_wing.
+source_roots = ["FixedWingPlantGA.mo"]
+
+[rumoca]
+version = "1"
+task = "simulate"
+
+[model]
+file = "FixedWingPythonSIL.mo"
+name = "FixedWingPythonSIL"
+
+# ── Simulation ──────────────────────────────────────────────────────────────
+# Multirate lockstep: every 1/50 s rumoca sends PlantState, then blocks until
+# exactly one StickCommand arrives before integrating the next 20 ms.
+[sim]
+dt = 0.004166666666666667
+mode = "lockstep"
+solver = "rk-like"
+
+[lockstep]
+send_rate_hz = 50
+receive_rate_hz = 50
+max_advance_dt = 0.004166666666666667
+
+# No gamepad/keyboard flying: the sticks come from Python.
+[input]
+mode = "auto"
+
+# ── Transports ──────────────────────────────────────────────────────────────
+[transport.udp]
+listen = "127.0.0.1:4250"   # StickCommand from Python
+send   = "127.0.0.1:4251"   # PlantState to Python
+
+[transport.http]
+port = 8080
+scene = "fixedwing_scene.js"
+asset_dir = "assets"
+
+[transport.websocket]
+port = 8081
+
+# ── FlatBuffer coupling ─────────────────────────────────────────────────────
+[schema]
+bfbs = ["schema/fixedwing_sil.bfbs"]
+
+[receive]
+root_type = "fixedwing_sil.StickCommand"
+
+[receive.route]
+"throttle" = { to = "model:throttle" }
+"elevator" = { to = "model:elevator" }
+"aileron"  = { to = "model:aileron" }
+"rudder"   = { to = "model:rudder" }
+
+[send]
+root_type = "fixedwing_sil.PlantState"
+
+[send.route]
+"t"      = { key = "s_t" }
+"p_n"    = { key = "s_pn" }
+"p_e"    = { key = "s_pe" }
+"p_d"    = { key = "s_pd" }
+"u"      = { key = "s_u" }
+"v"      = { key = "s_v" }
+"w"      = { key = "s_w" }
+"q_w"    = { key = "s_qw" }
+"q_x"    = { key = "s_qx" }
+"q_y"    = { key = "s_qy" }
+"q_z"    = { key = "s_qz" }
+"rate_p" = { key = "s_p" }
+"rate_q" = { key = "s_q" }
+"rate_r" = { key = "s_r" }
+
+[signals.send]
+s_t  = "model:time"
+s_pn = "model:flight.p_n"
+s_pe = "model:flight.p_e"
+s_pd = "model:flight.p_d"
+s_u  = "model:flight.u"
+s_v  = "model:flight.v"
+s_w  = "model:flight.w"
+s_qw = "model:flight.q_w"
+s_qx = "model:flight.q_x"
+s_qy = "model:flight.q_y"
+s_qz = "model:flight.q_z"
+s_p  = "model:flight.rate_p"
+s_q  = "model:flight.rate_q"
+s_r  = "model:flight.rate_r"
+
+# ── Viewer ──────────────────────────────────────────────────────────────────
+# The scene draws the plant's native Z-up world frame (flight.vehicle.*).
+[signals.viewer]
+px = "model:flight.vehicle.position[1]"
+py = "model:flight.vehicle.position[2]"
+pz = "model:flight.vehicle.position[3]"
+airspeed = "model:flight.vehicle.airspeed"
+alpha    = "model:flight.vehicle.alpha_deg"
+ail_rad  = "model:flight.vehicle.ail_rad"
+elev_rad = "model:flight.vehicle.elev_rad"
+rud_rad  = "model:flight.vehicle.rud_rad"
+throttle = "model:flight.vehicle.thr_out"
+stick_roll     = "model:aileron"
+stick_pitch    = "model:elevator"
+stick_yaw      = "model:rudder"
+stick_throttle = "model:throttle"
+t     = "model:time"
+frame = "runtime:frame_num"
+
+[signals.viewer.q0]
+default = 1.0
+from = "model:flight.vehicle.quat[1]"
+[signals.viewer.q1]
+default = 0.0
+from = "model:flight.vehicle.quat[2]"
+[signals.viewer.q2]
+default = 0.0
+from = "model:flight.vehicle.quat[3]"
+[signals.viewer.q3]
+default = 0.0
+from = "model:flight.vehicle.quat[4]"
+
+[viewer]
+mode = "external_web"
+status_title = "Fixed wing (Python outer loop)"
+
+[[viewer.frame]]
+name = "body"
+position = ["px", "py", "pz"]
+quaternion = ["q0", "q1", "q2", "q3"]
+
+[viewer.hud]
+altitude = "pz"
+frame = "body"
+mode = "flight"
+speed = ["airspeed"]
+
+[viewer.hud.sticks]
+pitch = "stick_pitch"
+roll = "stick_roll"
+throttle = "stick_throttle"
+yaw = "stick_yaw"

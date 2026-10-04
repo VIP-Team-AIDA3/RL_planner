@@ -1,0 +1,51 @@
+{
+  "name": "@cognipilot/rumoca-web",
+  "version": "0.9.4",
+  "description": "Hand-written browser assets for Rumoca: wasm runtime glue, workers, diffsol driver, WebGPU/WGSL execution, and visualization front-end.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "build": "node ./build.mjs",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/CogniPilot/rumoca",
+    "directory": "packages/rumoca-web"
+  },
+  "exports": {
+    "./viz": "./viz/visualization_shared.js",
+    "./results-app": "./viz/results_app.js",
+    "./results-report": "./viz/results_mount.js",
+    "./results-mount": "./viz/results_mount.js",
+    "./runtime": "./runtime/rumoca_runtime.js",
+    "./modelica-language": "./runtime/modelica_language.js",
+    "./gpu": "./runtime/rumoca_gpu.js",
+    "./worker": "./runtime/rumoca_worker.js",
+    "./parse-worker": "./runtime/parse_worker.js",
+    "./diffsol": "./runtime/rumoca_diffsol.js"
+  },
+  "files": [
+    "build.mjs",
+    "assistant_index.mjs",
+    "viz",
+    "runtime"
+  ],
+  "dependencies": {
+    "@ai-sdk/anthropic": "4.0.75",
+    "@ai-sdk/openai": "4.0.87",
+    "@ai-sdk/openai-compatible": "3.0.65",
+    "ai": "7.0.131",
+    "esbuild": "^0.28.1",
+    "jose": "6.2.12",
+    "jszip": "3.10.1",
+    "marked": "^18.0.5",
+    "monaco-editor": "0.45.0",
+    "oauth4webapi": "3.8.8",
+    "three": "0.164.1",
+    "uplot": "1.6.32"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true
+  }
+}

@@ -1,0 +1,37 @@
+// Lockstep SIL messages between rumoca (plant) and outer_loop.py (autopilot).
+//
+// Regenerate the reflection schema (read by rumoca) and the Python bindings:
+//   flatc --schema -b -o schema schema/fixedwing_sil.fbs
+//   flatc --python -o . schema/fixedwing_sil.fbs
+
+namespace fixedwing_sil;
+
+// rumoca -> Python, once per lockstep barrier (50 Hz).
+// Plant state in the harness's NED world / FRD body convention.
+table PlantState {
+  t: double;
+  p_n: double;
+  p_e: double;
+  p_d: double;
+  u: double;
+  v: double;
+  w: double;
+  q_w: double = 1.0;
+  q_x: double;
+  q_y: double;
+  q_z: double;
+  rate_p: double;
+  rate_q: double;
+  rate_r: double;
+}
+
+// Python -> rumoca, exactly one reply per PlantState.
+// Normalized stick commands into the SAFE inner loop (plant convention).
+table StickCommand {
+  throttle: double;
+  elevator: double;
+  aileron: double;
+  rudder: double;
+}
+
+root_type PlantState;
