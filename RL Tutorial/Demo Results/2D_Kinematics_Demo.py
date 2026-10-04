@@ -10,8 +10,8 @@ from enum import Enum
 from typing import Optional
 
 class PureKinematicGrid(gym.Env):
-    def __init__(self, grid_size=20, v_max=3.0, a_max=1.0, grid_density=10, lambda_accel=0.01,
-    lambda_smooth=0.05, num_a_values =10):
+    def __init__(self, grid_size=20, v_max=20, a_max=100, grid_density=20, lambda_accel=0.01,
+    lambda_smooth=0.05, num_a_values =11):
         self.grid_size = grid_size
         self.v_max = v_max
         self.a_max = a_max
@@ -64,24 +64,19 @@ class PureKinematicGrid(gym.Env):
         #TODO: Gym implementation
         px, py, vx, vy = self.state
         accel = self._action_to_accel[action]
+        ax, ay = accel
 
         # previous_accel is now the value of the previous acceleration for the #TODO: reward function
         previous_accel = self.prev_accel
 
-        new_vx = np.clip(vx + (accel * self.dt), -self.v_max, self.v_max)
-        new_vy = np.clip(vy + (accel * self.dt), -self.v_max, self.v_max)
+        new_vx = vx + (ax * self.dt)
+        new_vy = vy + (ay * self.dt)
         
-        new_px = np.clip(px + (vx * self.dt) + (0.5 * accel * (self.dt ** 2)), 0.0, self.grid_size - 1)
-        new_py = np.clip(py + (vy * self.dt) + (0.5 * accel * (self.dt ** 2)), 0.0, self.grid_size - 1)
-
-        if new_px in (0.0, self.grid_size - 1):
-            new_vx = 0.0
-        if new_py in (0.0, self.grid_size - 1):
-            new_vy = 0.0
+        new_px = np.clip(px + (vx * self.dt) + (0.5 * ax * (self.dt ** 2)), 0.0, self.grid_size - 1)
+        new_py = np.clip(py + (vy * self.dt) + (0.5 * ay * (self.dt ** 2)), 0.0, self.grid_size - 1)
 
         self.state = np.array([new_px, new_py, new_vx, new_vy], dtype=np.float32)
 
-        # gets the previous acceleration for #TODO: the reward function
         noisy_pos = self.noise(self.state[:2])
         discrete_state = self.discretize_state(noisy_pos, self.state[2:])
 
@@ -153,22 +148,21 @@ class PureKinematicGrid(gym.Env):
         for y in grid_points:
             self.ax.plot([0, self.grid_size], [y, y], color='lightgray', linewidth=0.5)
 
-        agent_circle = plt.Circle((position[0], position[1]), 0.3, color='blue', alpha=0.7)
+        agent_circle = plt.Circle((position[0], position[1]), 0.3, color='black', alpha=0.7)
         self.ax.add_artist(agent_circle)
         
-        plt.pause(0.1)
+        plt.pause(0.01)
 
 if __name__ == "__main__":
-    env = PureKinematicGrid(grid_size=20, v_max=50, a_max=50)
+    env = PureKinematicGrid()
     state = env.reset()
-    discrete_state = env.discretize_state(*state)
+    position, velocity = state[0][:2], state[0][2:]
+    discrete_state = env.discretize_state(position, velocity)
     env.render(discrete_state)
 
-    for _ in range(50):
+    for _ in range(100):
         action = np.random.choice(list(env._action_to_accel.keys()))
-        position, velocity = env.step(action, discrete_state)
-        noisy_position = env.noise(position, pos_noise_std=0.1)
-        discrete_state = env.discretize_state(noisy_position, velocity)
+        discrete_state = env.step(action)[0]
         env.render(discrete_state)
 
     plt.show()
