@@ -17,6 +17,10 @@ class PureKinematicGrid(gym.Env):
         self.a_max = a_max
         self.grid_density = grid_density # how many sub lines appear between whol integer values
         self.dt = 1 / self.grid_density #time step changes based on the grid density
+        self.plot_dt = self.dt / 2
+        self.agent_circle = None
+        self.trajectory_line = None
+        self.plot_path = []
         self.lambda_accel = lambda_accel
         self.lambda_smooth = lambda_smooth
         self.num_a_values = num_a_values
@@ -88,6 +92,29 @@ class PureKinematicGrid(gym.Env):
 
         return discrete_state, reward, terminated, truncated, {}
 
+    def plot_step(self, start_state, action):
+        """Animate the continuous motion for one step without changing env.state."""
+        if self.ax is None or self.agent_circle is None:
+            raise RuntimeError("Call render() once before plot_step().")
+
+        px, py, vx, vy = start_state
+        ax, ay = self._action_to_accel[action]
+        frame_count = max(1, int(np.ceil(self.dt / self.plot_dt)))
+        frame_times = np.linspace(0.0, self.dt, frame_count + 1)[1:]
+
+        for t in frame_times:
+            x = np.clip(px + vx * t + 0.5 * ax * t**2, 0.0, self.grid_size - 1)
+            y = np.clip(py + vy * t + 0.5 * ay * t**2, 0.0, self.grid_size - 1)
+            self.agent_circle.set_center((x, y))
+            self.plot_path.append((x, y))
+            path = np.asarray(self.plot_path)
+            self.trajectory_line.set_data(path[:, 0], path[:, 1])
+
+            self.fig.canvas.draw_idle()
+            self.fig.canvas.flush_events()
+            plt.pause(self.plot_dt)
+
+
     def compute_reward(self, accel: np.ndarray) -> float:
         px, py, vx, vy = self.state
         current_pos = np.array([px, py], dtype=np.float32)
@@ -148,21 +175,26 @@ class PureKinematicGrid(gym.Env):
         for y in grid_points:
             self.ax.plot([0, self.grid_size], [y, y], color='lightgray', linewidth=0.5)
 
-        agent_circle = plt.Circle((position[0], position[1]), 0.3, color='black', alpha=0.7)
-        self.ax.add_artist(agent_circle)
+        self.agent_circle = plt.Circle((position[0], position[1]), 0.3, color='black', alpha=0.7)
+        self.ax.add_patch(self.agent_circle)
+        self.plot_path = [np.asarray(position, dtype=float).copy()]
+        self.trajectory_line, = self.ax.plot(
+            [position[0]], [position[1]], color='tab:blue', linewidth=1.5
+        )
         
         plt.pause(0.01)
 
 if __name__ == "__main__":
     env = PureKinematicGrid()
-    state = env.reset()
-    position, velocity = state[0][:2], state[0][2:]
+    state, _ = env.reset()
+    position, velocity = state[:2], state[2:]
     discrete_state = env.discretize_state(position, velocity)
     env.render(discrete_state)
 
     for _ in range(100):
         action = np.random.choice(list(env._action_to_accel.keys()))
+        start_state = env.state.copy()
         discrete_state = env.step(action)[0]
-        env.render(discrete_state)
+        env.plot_step(start_state, action)
 
     plt.show()
