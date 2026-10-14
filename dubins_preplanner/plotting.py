@@ -10,6 +10,7 @@ import numpy as np
 from matplotlib.collections import LineCollection
 from matplotlib.lines import Line2D
 from matplotlib.patches import Circle, Rectangle
+from matplotlib.ticker import MaxNLocator
 
 from .path import Path
 
@@ -142,6 +143,7 @@ def plot_radius_sweep(results: list[dict], title: str | None = None, save=None):
     for x in r[~feas]:
         ax2.annotate("infeasible", (x, 0), ha="center", va="bottom", fontsize=8, color="firebrick", rotation=90)
     ax2.set_ylabel("OOB exits")
+    ax2.yaxis.set_major_locator(MaxNLocator(integer=True))
     ax2.set_xlabel("Turn radius (m)")
     for ax in (ax1, ax2):
         ax.grid(True, color="gainsboro", linewidth=0.5)

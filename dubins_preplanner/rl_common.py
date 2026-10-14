@@ -169,7 +169,8 @@ def main(algo: str, argv: list[str] | None = None) -> dict:
     parser.add_argument("--config", default=None)
     parser.add_argument("--course", default=None, help="override course_path from the config")
     parser.add_argument("--p-slip", type=float, default=None, help="override rl.p_slip")
-    parser.add_argument("--episodes", type=int, default=None, help="override rl.episodes")
+    parser.add_argument("--episodes", type=int, default=None,
+                        help="override rl.episodes (epsilon_decay_episodes scales with it)")
     args = parser.parse_args(argv)
 
     import matplotlib
@@ -182,7 +183,9 @@ def main(algo: str, argv: list[str] | None = None) -> dict:
     if args.p_slip is not None:
         cfg["rl"]["p_slip"] = args.p_slip
     if args.episodes is not None:
+        ratio = cfg["rl"]["epsilon_decay_episodes"] / cfg["rl"]["episodes"]
         cfg["rl"]["episodes"] = args.episodes
+        cfg["rl"]["epsilon_decay_episodes"] = int(round(ratio * args.episodes))
     rl = cfg["rl"]
     out_dir = resolve_repo_path(cfg["output_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)
