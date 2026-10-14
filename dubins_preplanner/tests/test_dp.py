@@ -3,10 +3,10 @@ import itertools
 import numpy as np
 import pytest
 
-from preplanner.config import load_config
-from preplanner.course import load_course
-from preplanner.dp import NoFeasibleLapError, solve_dp
-from preplanner.environment import DubinsGateMDP
+from dubins_preplanner.config import load_config
+from dubins_preplanner.course import load_course
+from dubins_preplanner.dp import NoFeasibleLapError, solve_dp
+from dubins_preplanner.environment import DubinsGateMDP
 
 COURSE1 = "ros2_ws/src/pylon_2026_world/purt_course.yaml"
 COURSE2 = "ros2_ws/src/pylon_2026_world/purt_course2.yaml"

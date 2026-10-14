@@ -1,8 +1,8 @@
 import numpy as np
 import pytest
 
-from preplanner.dubins import shortest_path
-from preplanner.path import Path, angle_diff, arc_segment, line_segment
+from dubins_preplanner.dubins import shortest_path
+from dubins_preplanner.path import Path, angle_diff, arc_segment, line_segment
 
 
 def _example_path(radius=10.0):

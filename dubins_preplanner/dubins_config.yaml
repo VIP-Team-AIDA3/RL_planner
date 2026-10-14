@@ -39,4 +39,4 @@ flyability:
   dt_s: 0.01
   skip_initial_s: 2.0
 
-output_dir: preplanner/out
+output_dir: dubins_preplanner/out

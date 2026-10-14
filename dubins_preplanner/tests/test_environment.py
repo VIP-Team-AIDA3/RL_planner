@@ -1,10 +1,10 @@
 import numpy as np
 import pytest
 
-from preplanner.config import load_config
-from preplanner.course import Course, load_course
-from preplanner.dubins import shortest_path
-from preplanner.environment import CRASH_REWARD, DubinsGateMDP, leg_metrics
+from dubins_preplanner.config import load_config
+from dubins_preplanner.course import Course, load_course
+from dubins_preplanner.dubins import shortest_path
+from dubins_preplanner.environment import CRASH_REWARD, DubinsGateMDP, leg_metrics
 
 COURSE2 = "ros2_ws/src/pylon_2026_world/purt_course2.yaml"
 

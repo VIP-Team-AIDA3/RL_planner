@@ -1,8 +1,8 @@
 import numpy as np
 import pytest
 
-from preplanner.dubins import WORDS, dubins_words, shortest_path, turn_radius, word_segments
-from preplanner.path import angle_diff
+from dubins_preplanner.dubins import WORDS, dubins_words, shortest_path, turn_radius, word_segments
+from dubins_preplanner.path import angle_diff
 
 
 def _random_pose(rng, scale=50.0):

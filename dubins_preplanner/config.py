@@ -29,7 +29,7 @@ def deep_update(base: dict, overrides: dict) -> dict:
 
 
 def load_config(path: str | Path | None = None, overrides: dict | None = None) -> dict:
-    """Load the YAML config (default: ``preplanner/dubins_config.yaml``) and apply ``overrides``."""
+    """Load the YAML config (default: ``dubins_preplanner/dubins_config.yaml``) and apply ``overrides``."""
     with open(path or DEFAULT_CONFIG_PATH) as f:
         cfg = yaml.safe_load(f)
     return deep_update(cfg, overrides or {})

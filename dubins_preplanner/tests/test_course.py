@@ -1,8 +1,8 @@
 import numpy as np
 import pytest
 
-from preplanner.config import load_config
-from preplanner.course import crossing_poses, heading_count, load_course
+from dubins_preplanner.config import load_config
+from dubins_preplanner.course import crossing_poses, heading_count, load_course
 
 COURSE1 = "ros2_ws/src/pylon_2026_world/purt_course.yaml"
 COURSE2 = "ros2_ws/src/pylon_2026_world/purt_course2.yaml"

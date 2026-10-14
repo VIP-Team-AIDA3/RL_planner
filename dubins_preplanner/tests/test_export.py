@@ -1,12 +1,12 @@
 import numpy as np
 import pytest
 
-from preplanner.config import load_config
-from preplanner.course import load_course
-from preplanner.dp import solve_dp
-from preplanner.environment import DubinsGateMDP
-from preplanner.export import load_nominal_path, write_nominal_path
-from preplanner.path import angle_diff
+from dubins_preplanner.config import load_config
+from dubins_preplanner.course import load_course
+from dubins_preplanner.dp import solve_dp
+from dubins_preplanner.environment import DubinsGateMDP
+from dubins_preplanner.export import load_nominal_path, write_nominal_path
+from dubins_preplanner.path import angle_diff
 
 COURSE2 = "ros2_ws/src/pylon_2026_world/purt_course2.yaml"
 
