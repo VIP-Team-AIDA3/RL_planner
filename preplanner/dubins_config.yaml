@@ -1,0 +1,42 @@
+course_path: ros2_ws/src/pylon_2026_world/purt_course2.yaml
+
+aircraft:
+  airspeed_mps: 7.0
+  plan_bank_deg: 25.0
+  max_bank_deg: 30.0
+  turn_radius_m: null          # null -> computed as V^2 / (g tan(plan_bank))
+  g: 9.81
+
+discretization:
+  n_crossing_points: 5
+  heading_offsets_deg: [-60, -30, 0, 30, 60]
+  both_directions: true
+  sample_ds_m: 0.1
+
+costs:
+  pylon_field_radius_m: null   # null -> course gate_margin_m
+  pylon_penalty_s_per_m2: 1.0
+  oob_mode: penalty            # penalty | forbid
+  oob_penalty_s: null          # null -> course out_of_bounds_penalty_s
+
+lap:
+  mode: single                 # single | periodic (periodic is DP only)
+  start_pose_index: null       # null -> DP picks the best G1 start pose
+
+rl:
+  p_slip: 0.2
+  episodes: 20000
+  alpha: 0.1
+  gamma: 1.0
+  epsilon_start: 1.0
+  epsilon_end: 0.05
+  epsilon_decay_episodes: 15000
+  seed: 0
+
+flyability:
+  l1_over_r: 0.6               # L1 look-ahead = 0.6 * turn radius
+  roll_time_constant_s: 0.2
+  dt_s: 0.01
+  skip_initial_s: 2.0
+
+output_dir: preplanner/out
