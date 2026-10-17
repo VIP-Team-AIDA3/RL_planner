@@ -184,7 +184,7 @@ class DubinsGateEnv(gym.Env):
         legs = self.lap_paths(state_history)
         if legs:
             pts = np.concatenate([leg.sample(0.2)[:, :2] for leg in legs])
-            segments = np.stack([pts[:-1], pts[1:]], axis=1)
+            segments = list(np.stack([pts[:-1], pts[1:]], axis=1))  # LineCollection is typed to take a sequence
             lc = LineCollection(segments, cmap="plasma", linewidths=3, alpha=0.9, zorder=2, capstyle="round")
             lc.set_array(np.linspace(0, 1, len(segments)))
             ax.add_collection(lc)
