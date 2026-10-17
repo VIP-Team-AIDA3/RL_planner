@@ -1,12 +1,3 @@
-"""Shortest Dubins paths (Dubins 1957), in pure NumPy.
-
-A Dubins path joins two poses with straight lines and circular arcs of a fixed minimum turn radius
-R. The shortest one is always one of six words: LSL, RSR, LSR, RSL, RLR, LRL. Every word is solved
-in normalized form (radius 1) and the shortest feasible one wins.
-
-Conventions: pose = (x, y, theta), theta 0 = +x and CCW positive; radians throughout.
-"""
-
 from dataclasses import dataclass
 from math import acos, atan2, cos, sin, sqrt
 
