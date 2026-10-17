@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from dubins_preplanner.dubins import WORDS, dubins_words, shortest_path, turn_radius, word_segments
+from dubins_preplanner.dubins import WORDS, dubins_words, shortest_path, word_segments
 from dubins_preplanner.path import angle_diff
 
 
@@ -89,12 +89,6 @@ def test_sampling_spacing_and_smooth_heading():
         assert np.allclose(pts[0, :2], q0[:2]) and np.allclose(pts[-1, :2], q1[:2], atol=1e-6)
         assert np.all(np.hypot(*np.diff(pts[:, :2], axis=0).T) <= ds + 1e-9)
         assert np.all(np.abs(angle_diff(pts[1:, 2], pts[:-1, 2])) <= ds / radius + 1e-9)
-
-
-def test_turn_radius():
-    # The plan quotes ~10.68 m; V^2 / (g tan 25deg) with g = 9.81 is 10.71 m.
-    assert turn_radius(7.0, np.radians(25)) == pytest.approx(10.71, abs=0.01)
-    assert turn_radius(7.0, np.radians(30)) == pytest.approx(8.65, abs=0.01)
 
 
 def test_words_constant_order():

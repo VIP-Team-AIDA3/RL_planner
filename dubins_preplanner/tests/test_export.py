@@ -43,10 +43,10 @@ def test_s_start_cumulative(tmp_path):
         assert b["s_start_m"] == pytest.approx(a["s_start_m"] + a["length_m"], abs=1e-6)
     for seg in segs:
         if seg["kind"] == "arc":
-            assert seg["bank_ff_deg"] == pytest.approx(25.0 * seg["direction"], abs=1e-6)
             assert seg["radius"] >= env.radius - 1e-6
+            assert seg["direction"] in (-1, 1)
         else:
-            assert seg["bank_ff_deg"] == 0.0
+            assert "radius" not in seg and "direction" not in seg
     assert yaml.safe_load(open(tmp_path / "p.yaml"))["meta"]["solver"] == "dp"
 
 

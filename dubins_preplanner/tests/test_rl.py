@@ -26,7 +26,7 @@ def test_q_learning_matches_dp_without_noise(env_clean):
     Q, _, returns, history = train_q_learning(env, rl)
     ev = evaluate(env, q_policy(env, Q), dp.pose_indices[0], p_slip=0.0, n_noisy=1)
     assert not ev["clean"].crashed
-    assert ev["clean"].cost_s <= 1.02 * dp.total_cost_s
+    assert ev["clean"].cost <= 1.02 * dp.total_cost
     assert len(returns) == rl["episodes"] and history[-1]["episode"] == rl["episodes"]
 
 
@@ -34,8 +34,8 @@ def test_sarsa_lap_is_valid(env_clean):
     env, dp = env_clean
     Q, _, _, _ = train_sarsa(env, {**env.cfg["rl"], "episodes": 20_000})
     ev = evaluate(env, q_policy(env, Q), dp.pose_indices[0], p_slip=0.0, n_noisy=1)
-    assert not ev["clean"].crashed and np.isfinite(ev["clean"].cost_s)
-    assert ev["clean"].cost_s >= dp.total_cost_s - 1e-9
+    assert not ev["clean"].crashed and np.isfinite(ev["clean"].cost)
+    assert ev["clean"].cost >= dp.total_cost - 1e-9
 
 
 def test_masked_actions_never_selected(env_clean):

@@ -1,7 +1,6 @@
 """Config loading for the Dubins pre-planner.
 
-Every tunable lives in ``dubins_config.yaml``; this module reads it, applies overrides, and resolves
-the derived values (turn radius) so the rest of the code never re-derives them.
+Every tunable lives in ``dubins_config.yaml``; this module reads it and applies overrides.
 """
 
 from __future__ import annotations
@@ -9,7 +8,6 @@ from __future__ import annotations
 import copy
 from pathlib import Path
 
-import numpy as np
 import yaml
 
 PACKAGE_DIR = Path(__file__).resolve().parent
@@ -44,10 +42,5 @@ def resolve_repo_path(path: str | Path) -> Path:
 
 
 def turn_radius_from_cfg(cfg: dict) -> float:
-    """Planning turn radius: ``turn_radius_m`` if set, else V^2 / (g tan(plan_bank))."""
-    ac = cfg["aircraft"]
-    if ac.get("turn_radius_m") is not None:
-        return float(ac["turn_radius_m"])
-    from .dubins import turn_radius
-
-    return turn_radius(ac["airspeed_mps"], np.radians(ac["plan_bank_deg"]), ac.get("g", 9.81))
+    """Minimum turn radius of every arc in the path, in meters."""
+    return float(cfg["turn_radius_m"])

@@ -1,8 +1,7 @@
 """``nominal_path.yaml``: the hand-off format from the pre-planner to the dynamic planner.
 
 The file holds metadata, the gate crossings in lap order (with their arc length ``s_m`` along the
-lap) and the contiguous line/arc segments. ``bank_ff_deg`` is each segment's feed-forward bank
-(Stastny & Siegwart 2018, eq. 21); the dynamic planner's actions will be offsets from it.
+lap) and the contiguous line/arc segments.
 """
 
 from __future__ import annotations
@@ -24,7 +23,7 @@ def _pose(p) -> list[float]:
     return [_f(p[0]), _f(p[1]), _f(wrap_2pi(p[2]))]
 
 
-def segment_to_dict(seg: Segment, s_start: float, airspeed: float, g: float) -> dict:
+def segment_to_dict(seg: Segment, s_start: float) -> dict:
     d = {"kind": seg.kind}
     if seg.kind == "arc":
         d["direction"] = int(seg.direction)
@@ -35,8 +34,6 @@ def segment_to_dict(seg: Segment, s_start: float, airspeed: float, g: float) -> 
         d["radius"] = _f(seg.radius)
     d["length_m"] = _f(seg.length)
     d["s_start_m"] = _f(s_start)
-    bank = np.degrees(np.arctan(airspeed**2 / (g * seg.radius))) * seg.direction if seg.kind == "arc" else 0.0
-    d["bank_ff_deg"] = _f(bank)
     return d
 
 
@@ -51,7 +48,6 @@ def segment_from_dict(d: dict) -> Segment:
 def write_nominal_path(out_path, plan, env, solver: str = "dp", lap_mode: str = "single") -> dict:
     """Write a Plan (see ``dp.Plan``) solved on ``env`` to ``out_path``; returns the written dict."""
     cfg = env.cfg
-    g = cfg["aircraft"].get("g", 9.81)
     path = plan.path()
 
     crossings, s = [], 0.0
@@ -69,16 +65,14 @@ def write_nominal_path(out_path, plan, env, solver: str = "dp", lap_mode: str = 
         "meta": {
             "course_path": str(cfg["course_path"]),
             "solver": solver,
-            "airspeed_mps": _f(env.airspeed),
             "turn_radius_m": _f(env.radius),
-            "plan_bank_deg": _f(np.degrees(np.arctan(env.airspeed**2 / (g * env.radius)))),
             "lap_mode": lap_mode,
             "total_length_m": _f(path.length),
-            "lap_time_s": _f(plan.lap_time_s),
+            "total_cost_m": _f(plan.total_cost),
             "created": datetime.now().isoformat(timespec="seconds"),
         },
         "gate_crossings": crossings,
-        "segments": [segment_to_dict(seg, s0, env.airspeed, g) for seg, s0 in zip(path.segments, path.s_start)],
+        "segments": [segment_to_dict(seg, s0) for seg, s0 in zip(path.segments, path.s_start)],
     }
     out_path = FsPath(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)

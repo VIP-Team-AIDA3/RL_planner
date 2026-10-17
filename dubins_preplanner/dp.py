@@ -34,20 +34,15 @@ class Plan:
     pose_indices: list[int]
     crossings: list[CrossingPose]
     legs: list[DubinsPath]
-    leg_cost_s: np.ndarray
-    leg_time_s: np.ndarray
+    leg_cost: np.ndarray
     leg_min_pylon_dist_m: np.ndarray
     leg_violation_m2: np.ndarray
     leg_oob_exits: np.ndarray
     gate_names: list[str] = field(default_factory=list)
 
     @property
-    def total_cost_s(self) -> float:
-        return float(self.leg_cost_s.sum())
-
-    @property
-    def lap_time_s(self) -> float:
-        return float(self.leg_time_s.sum())
+    def total_cost(self) -> float:
+        return float(self.leg_cost.sum())
 
     @property
     def total_length_m(self) -> float:
@@ -67,7 +62,7 @@ class Plan:
 
     @property
     def feasible(self) -> bool:
-        return bool(np.all(np.isfinite(self.leg_cost_s)))
+        return bool(np.all(np.isfinite(self.leg_cost)))
 
     def path(self) -> Path:
         return Path([seg for leg in self.legs for seg in leg.segments()])
@@ -75,15 +70,14 @@ class Plan:
 
 def plan_from_sequence(env: DubinsGateMDP, pose_indices: list[int], cost: np.ndarray | None = None) -> Plan:
     """Build a Plan from the pose index crossed on each layer 0..n."""
-    cost = env.cost_s if cost is None else cost
+    cost = env.cost if cost is None else cost
     ks = np.arange(env.n_gates)
     i, j = np.asarray(pose_indices[:-1]), np.asarray(pose_indices[1:])
     return Plan(
         pose_indices=[int(p) for p in pose_indices],
         crossings=[env.crossing(k, p) for k, p in enumerate(pose_indices)],
         legs=[env.leg_path(k, a, b) for k, (a, b) in enumerate(zip(i, j))],
-        leg_cost_s=cost[ks, i, j],
-        leg_time_s=env.time_s[ks, i, j],
+        leg_cost=cost[ks, i, j],
         leg_min_pylon_dist_m=env.min_pylon_dist_m[ks, i, j],
         leg_violation_m2=env.pylon_violation_m2[ks, i, j],
         leg_oob_exits=env.oob_exits[ks, i, j],
@@ -118,7 +112,7 @@ def solve_dp(env: DubinsGateMDP, mode: str | None = None, start_pose_index: int 
     mode = mode or lap.get("mode", "single")
     if start_pose_index is None:
         start_pose_index = lap.get("start_pose_index")
-    cost = env.cost_s if cost is None else cost
+    cost = env.cost if cost is None else cost
     P = env.P
 
     if mode == "single":
@@ -145,15 +139,15 @@ def solve_dp(env: DubinsGateMDP, mode: str | None = None, start_pose_index: int 
 
 
 def summary_table(plan: Plan, env: DubinsGateMDP) -> str:
-    rows = [f"{'leg':<10}{'word':<6}{'length m':>10}{'time s':>9}{'cost s':>9}{'min pylon m':>13}{'OOB':>5}"]
+    rows = [f"{'leg':<10}{'word':<6}{'length m':>10}{'cost m':>9}{'min pylon m':>13}{'OOB':>5}"]
     for k, leg in enumerate(plan.legs):
         name = f"{plan.gate_names[k]}->{plan.gate_names[k + 1]}"
         word = "".join(ch for ch, v in zip(leg.word, leg.params) if v * leg.radius >= 1e-9) or "-"
-        rows.append(f"{name:<10}{word:<6}{leg.length:>10.2f}{plan.leg_time_s[k]:>9.2f}{plan.leg_cost_s[k]:>9.2f}"
+        rows.append(f"{name:<10}{word:<6}{leg.length:>10.2f}{plan.leg_cost[k]:>9.2f}"
                     f"{plan.leg_min_pylon_dist_m[k]:>13.2f}{plan.leg_oob_exits[k]:>5d}")
-    rows.append(f"{'total':<16}{plan.total_length_m:>10.2f}{plan.lap_time_s:>9.2f}{plan.total_cost_s:>9.2f}"
+    rows.append(f"{'total':<16}{plan.total_length_m:>10.2f}{plan.total_cost:>9.2f}"
                 f"{plan.min_pylon_dist_m:>13.2f}{plan.total_oob_exits:>5d}")
-    rows.append(f"turn radius {env.radius:.2f} m, airspeed {env.airspeed:.1f} m/s, "
+    rows.append(f"turn radius {env.radius:.2f} m, "
                 f"pylon violation {plan.total_violation_m2:.3f} m^2, start pose G1[{plan.pose_indices[0]}]")
     return "\n".join(rows)
 
@@ -163,27 +157,22 @@ def radius_sweep(cfg: dict, radii: np.ndarray) -> list[dict]:
     course = load_course(cfg["course_path"])
     results = []
     for r in radii:
-        env = DubinsGateMDP(course, {**cfg, "aircraft": {**cfg["aircraft"], "turn_radius_m": float(r)}})
+        env = DubinsGateMDP(course, {**cfg, "turn_radius_m": float(r)})
         row = {"radius_m": float(r), "feasible": True}
         try:
             plan = solve_dp(env)
-            row.update(lap_time_s=plan.lap_time_s, cost_s=plan.total_cost_s, oob_exits=plan.total_oob_exits,
+            row.update(length_m=plan.total_length_m, cost=plan.total_cost, oob_exits=plan.total_oob_exits,
                        min_pylon_dist_m=plan.min_pylon_dist_m, violation_m2=plan.total_violation_m2)
         except NoFeasibleLapError:
-            row.update(feasible=False, lap_time_s=np.nan, cost_s=np.nan, oob_exits=-1,
+            row.update(feasible=False, length_m=np.nan, cost=np.nan, oob_exits=-1,
                        min_pylon_dist_m=np.nan, violation_m2=np.nan)
         try:
             plan_f = solve_dp(env, cost=env.costs("forbid"))
-            row.update(oob_free_feasible=True, oob_free_lap_time_s=plan_f.lap_time_s)
+            row.update(oob_free_feasible=True, oob_free_length_m=plan_f.total_length_m)
         except NoFeasibleLapError:
-            row.update(oob_free_feasible=False, oob_free_lap_time_s=np.nan)
+            row.update(oob_free_feasible=False, oob_free_length_m=np.nan)
         results.append(row)
     return results
-
-
-def bank_for_radius(radius: float, airspeed: float, g: float = 9.81) -> float:
-    """Bank angle (deg) that flies ``radius`` at ``airspeed``."""
-    return float(np.degrees(np.arctan(airspeed**2 / (g * radius))))
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -208,20 +197,17 @@ def main(argv: list[str] | None = None) -> None:
         lo, hi, step = args.sweep_radius
         radii = np.round(np.arange(lo, hi + 1e-9, step), 6)
         results = radius_sweep(cfg, radii)
-        V, g = cfg["aircraft"]["airspeed_mps"], cfg["aircraft"].get("g", 9.81)
-        print(f"Radius sweep on {cfg['course_path']} (V = {V} m/s)")
-        print(f"{'R m':>6}{'bank deg':>10}{'feasible':>10}{'lap s':>8}{'cost s':>8}{'OOB':>5}{'min pylon m':>13}"
-              f"{'OOB-free lap':>14}")
+        print(f"Radius sweep on {cfg['course_path']}")
+        print(f"{'R m':>6}{'feasible':>10}{'length m':>10}{'cost m':>9}{'OOB':>5}{'min pylon m':>13}"
+              f"{'OOB-free length m':>19}")
         for r in results:
-            oob_free = f"{r['oob_free_lap_time_s']:.2f}" if r["oob_free_feasible"] else "none"
-            print(f"{r['radius_m']:>6.2f}{bank_for_radius(r['radius_m'], V, g):>10.1f}{str(r['feasible']):>10}"
-                  f"{r['lap_time_s']:>8.2f}{r['cost_s']:>8.2f}{r['oob_exits']:>5d}{r['min_pylon_dist_m']:>13.2f}"
-                  f"{oob_free:>14}")
+            oob_free = f"{r['oob_free_length_m']:.2f}" if r["oob_free_feasible"] else "none"
+            print(f"{r['radius_m']:>6.2f}{str(r['feasible']):>10}{r['length_m']:>10.2f}{r['cost']:>9.2f}"
+                  f"{r['oob_exits']:>5d}{r['min_pylon_dist_m']:>13.2f}{oob_free:>19}")
         clean = [r for r in results if r["feasible"] and r["oob_exits"] == 0]
         if clean:
             best = max(clean, key=lambda r: r["radius_m"])
-            print(f"Largest radius with a valid, zero-OOB DP lap: {best['radius_m']:.2f} m "
-                  f"(bank {bank_for_radius(best['radius_m'], V, g):.1f} deg at {V} m/s)")
+            print(f"Largest radius with a valid, zero-OOB DP lap: {best['radius_m']:.2f} m")
         else:
             print("No radius in the sweep gives a valid lap with zero OOB exits.")
         stem = FsPath(cfg["course_path"]).stem
@@ -237,7 +223,7 @@ def main(argv: list[str] | None = None) -> None:
     yaml_path = out_dir / "nominal_path.yaml"
     export.write_nominal_path(yaml_path, plan, env, solver="dp", lap_mode=args.mode or cfg["lap"]["mode"])
     png_path = out_dir / "dp_path.png"
-    plotting.plot_plan(course, plan, title=f"DP lap: {plan.lap_time_s:.2f} s", field_radius=env.field_radius,
+    plotting.plot_plan(course, plan, title=f"DP lap: {plan.total_length_m:.2f} m", field_radius=env.field_radius,
                        save=png_path)
     print(f"wrote {yaml_path}\nwrote {png_path}")
 

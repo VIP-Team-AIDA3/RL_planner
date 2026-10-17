@@ -10,7 +10,7 @@ Conventions: pose = (x, y, theta), theta 0 = +x and CCW positive; radians throug
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import acos, atan2, cos, sin, sqrt, tan
+from math import acos, atan2, cos, sin, sqrt
 
 import numpy as np
 
@@ -26,11 +26,6 @@ def mod2pi(a: float) -> float:
     path that needs no turn never comes out as a full loop."""
     r = a % TWO_PI
     return 0.0 if r > TWO_PI - 1e-10 else r
-
-
-def turn_radius(airspeed: float, bank_rad: float, g: float = 9.81) -> float:
-    """Coordinated-turn radius R = V^2 / (g tan(bank))."""
-    return airspeed**2 / (g * tan(bank_rad))
 
 
 def _normalize(q0, q1, radius) -> tuple[float, float, float]:

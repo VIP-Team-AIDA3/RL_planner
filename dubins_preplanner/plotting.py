@@ -117,7 +117,7 @@ def plot_learning_curves(curves: dict[str, np.ndarray], dp_optimum: float | None
     if dp_optimum is not None:
         ax.axhline(dp_optimum, color=CURVE_COLORS["dp"], lw=1.5, ls="--", label=f"DP optimum ({dp_optimum:.2f})")
     ax.set_xlabel("Episode")
-    ax.set_ylabel("Episode return (= -lap cost, s)")
+    ax.set_ylabel("Episode return (= -lap cost, m)")
     ax.grid(True, color="gainsboro", linewidth=0.5)
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
@@ -126,17 +126,17 @@ def plot_learning_curves(curves: dict[str, np.ndarray], dp_optimum: float | None
 
 
 def plot_radius_sweep(results: list[dict], title: str | None = None, save=None):
-    """Lap time (top) and OOB exits / feasibility (bottom) vs. turn radius, on a shared x-axis."""
+    """Lap length (top) and OOB exits / feasibility (bottom) vs. turn radius, on a shared x-axis."""
     r = np.array([row["radius_m"] for row in results])
-    lap = np.array([row["lap_time_s"] for row in results], dtype=float)
+    lap = np.array([row["length_m"] for row in results], dtype=float)
     oob = np.array([row["oob_exits"] for row in results], dtype=float)
-    free = np.array([row["oob_free_lap_time_s"] for row in results], dtype=float)
+    free = np.array([row["oob_free_length_m"] for row in results], dtype=float)
     feas = np.array([row["feasible"] for row in results])
 
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(9, 6), sharex=True, gridspec_kw={"height_ratios": [2, 1]})
     ax1.plot(r, lap, "o-", color="#2a78d6", lw=2, ms=6, label="DP lap (OOB as penalty)")
     ax1.plot(r, free, "s--", color="#1baf7a", lw=2, ms=6, label="DP lap (OOB forbidden)")
-    ax1.set_ylabel("Lap time (s)")
+    ax1.set_ylabel("Lap length (m)")
     ax1.legend(fontsize=9, loc="upper left")
     ax2.bar(r, np.where(feas, oob, 0), width=0.6 * (r[1] - r[0] if len(r) > 1 else 1), color="#444444",
             label="OOB exits on DP lap")
@@ -155,15 +155,3 @@ def plot_radius_sweep(results: list[dict], title: str | None = None, save=None):
         fig.savefig(save, dpi=150, bbox_inches="tight")
         plt.close(fig)
     return fig
-
-
-def plot_flyability(course, path: Path, flown_xy: np.ndarray, title: str | None = None,
-                    field_radius: float | None = None, save=None):
-    """Overlay the simulated flight on the planned path."""
-    x_lo, x_hi, y_lo, y_hi = course.bounds
-    fig, ax = plt.subplots(figsize=(10, max(4.0, 8.5 * (y_hi - y_lo) / (x_hi - x_lo))))
-    plot_course(course, ax, field_radius)
-    _draw_path(ax, path)
-    ax.plot(flown_xy[:, 0], flown_xy[:, 1], color="black", lw=1.0, ls="--", zorder=4, label="Flown (L1 tracker)")
-    _finish(fig, ax, title or "Flyability check", save)
-    return ax

@@ -1,1 +1,1 @@
-"""Dubins gate pre-planner: plans flyable laps of a pylon course as line/arc segments."""
+"""Dubins gate pre-planner: plans laps of a pylon course as Dubins line/arc segments."""

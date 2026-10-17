@@ -26,18 +26,18 @@ def _brute_force(env, periodic=False):
     for seq in itertools.product(range(P), repeat=n + 1):
         if periodic and seq[-1] != seq[0]:
             continue
-        best = min(best, sum(env.cost_s[k, seq[k], seq[k + 1]] for k in range(n)))
+        best = min(best, sum(env.cost[k, seq[k], seq[k + 1]] for k in range(n)))
     return best
 
 
 def test_dp_matches_brute_force(tiny_env):
     plan = solve_dp(tiny_env, mode="single")
-    assert plan.total_cost_s == pytest.approx(_brute_force(tiny_env), abs=1e-12)
+    assert plan.total_cost == pytest.approx(_brute_force(tiny_env), abs=1e-12)
 
 
 def test_dp_matches_brute_force_periodic(tiny_env):
     plan = solve_dp(tiny_env, mode="periodic")
-    assert plan.total_cost_s == pytest.approx(_brute_force(tiny_env, periodic=True), abs=1e-12)
+    assert plan.total_cost == pytest.approx(_brute_force(tiny_env, periodic=True), abs=1e-12)
 
 
 def test_fixed_start_pose(tiny_env):
@@ -51,7 +51,7 @@ def test_periodic_closes_the_lap():
     plan = solve_dp(env, mode="periodic")
     assert plan.pose_indices[0] == plan.pose_indices[-1]
     assert np.allclose(plan.crossings[0].pose, plan.crossings[-1].pose)
-    assert plan.total_cost_s >= solve_dp(env, mode="single").total_cost_s - 1e-9
+    assert plan.total_cost >= solve_dp(env, mode="single").total_cost - 1e-9
 
 
 def test_plan_is_feasible_and_contiguous():
@@ -66,7 +66,7 @@ def test_plan_is_feasible_and_contiguous():
 
 
 def test_no_feasible_lap_raises():
-    cfg = load_config(overrides={"course_path": COURSE1, "aircraft": {"turn_radius_m": 1000.0},
+    cfg = load_config(overrides={"course_path": COURSE1, "turn_radius_m": 1000.0,
                                  "costs": {"oob_mode": "forbid"}, **TINY})
     env = DubinsGateMDP(load_course(COURSE1), cfg)
     with pytest.raises(NoFeasibleLapError):

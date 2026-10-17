@@ -100,8 +100,8 @@ def train(env: DubinsGateMDP, rl: dict, algo: str, policy_snapshot_every: int = 
 @dataclass
 class Rollout:
     pose_indices: list[int]
-    cost_s: float              # -return; includes the crash reward if the lap crashed
-    lap_time_s: float
+    cost: float              # -return (meters); includes the crash reward if the lap crashed
+    length_m: float
     min_pylon_dist_m: float
     crashed: bool
 
@@ -112,17 +112,17 @@ def rollout(env: DubinsGateMDP, policy, start: int, p_slip: float) -> Rollout:
     env.p_slip = p_slip
     try:
         s = env.reset(start_pose_index=start)
-        seq, ret, time_s, min_d, crashed = [start], 0.0, 0.0, np.inf, False
+        seq, ret, length, min_d, crashed = [start], 0.0, 0.0, np.inf, False
         done = False
         while not done:
             k, i = env.decode(s)
             s, r, done, info = env.step(policy(k, i))
             seq.append(info["realized"])
             ret += r
-            time_s += info["length_m"] / env.airspeed
+            length += info["length_m"]
             min_d = min(min_d, info["min_pylon_dist_m"])
             crashed |= info["crashed"]
-        return Rollout(seq, -ret, time_s, min_d, crashed)
+        return Rollout(seq, -ret, length, min_d, crashed)
     finally:
         env.p_slip = saved
 
@@ -139,8 +139,8 @@ def evaluate(env: DubinsGateMDP, policy, start: int, p_slip: float, n_noisy: int
     return {
         "clean": clean,
         "clean_plan": None if clean.crashed else plan_from_sequence(env, clean.pose_indices),
-        "noisy_mean_cost_s": float(np.mean([r.cost_s for r in noisy])),
-        "noisy_mean_lap_time_s": float(np.mean([r.lap_time_s for r in ok])) if ok else np.nan,
+        "noisy_mean_cost": float(np.mean([r.cost for r in noisy])),
+        "noisy_mean_length_m": float(np.mean([r.length_m for r in ok])) if ok else np.nan,
         "noisy_crash_rate": float(np.mean([r.crashed for r in noisy])),
         "noisy_mean_min_pylon_m": float(np.mean([r.min_pylon_dist_m for r in ok])) if ok else np.nan,
         "noisy_worst_min_pylon_m": float(np.min([r.min_pylon_dist_m for r in ok])) if ok else np.nan,
@@ -148,18 +148,18 @@ def evaluate(env: DubinsGateMDP, policy, start: int, p_slip: float, n_noisy: int
 
 
 def report(name: str, ev: dict, dp_plan: Plan, p_slip: float) -> str:
-    dp = dp_plan.total_cost_s
+    dp = dp_plan.total_cost
     clean = ev["clean"]
     lines = [f"{name}: greedy lap from DP start pose G1[{dp_plan.pose_indices[0]}]"]
     if clean.crashed:
         lines.append("  noise-free: CRASHED")
     else:
-        lines.append(f"  noise-free: cost {clean.cost_s:.2f} s (lap {clean.lap_time_s:.2f} s), "
-                     f"DP optimum {dp:.2f} s, gap {100 * (clean.cost_s - dp) / dp:+.2f}%, "
+        lines.append(f"  noise-free: cost {clean.cost:.2f} m (length {clean.length_m:.2f} m), "
+                     f"DP optimum {dp:.2f} m, gap {100 * (clean.cost - dp) / dp:+.2f}%, "
                      f"min pylon {clean.min_pylon_dist_m:.2f} m")
-    lines.append(f"  p_slip={p_slip}: mean cost {ev['noisy_mean_cost_s']:.2f} s "
-                 f"(gap {100 * (ev['noisy_mean_cost_s'] - dp) / dp:+.2f}% vs DP noise-free), "
-                 f"mean lap {ev['noisy_mean_lap_time_s']:.2f} s, crash rate {100 * ev['noisy_crash_rate']:.0f}%, "
+    lines.append(f"  p_slip={p_slip}: mean cost {ev['noisy_mean_cost']:.2f} m "
+                 f"(gap {100 * (ev['noisy_mean_cost'] - dp) / dp:+.2f}% vs DP noise-free), "
+                 f"mean length {ev['noisy_mean_length_m']:.2f} m, crash rate {100 * ev['noisy_crash_rate']:.0f}%, "
                  f"pylon clearance mean {ev['noisy_mean_min_pylon_m']:.2f} m / worst {ev['noisy_worst_min_pylon_m']:.2f} m")
     return "\n".join(lines)
 
@@ -201,12 +201,12 @@ def main(algo: str, argv: list[str] | None = None) -> dict:
     print(report(algo, ev, dp_plan, rl["p_slip"]))
 
     curve = out_dir / f"{algo}_learning_curve.png"
-    plotting.plot_learning_curves({algo: returns}, dp_optimum=-dp_plan.total_cost_s,
+    plotting.plot_learning_curves({algo: returns}, dp_optimum=-dp_plan.total_cost,
                                   title=f"{algo} (p_slip={rl['p_slip']})", save=curve)
     print(f"wrote {curve}")
     if ev["clean_plan"] is not None:
         png = out_dir / f"{algo}_path.png"
-        plotting.plot_plan(course, ev["clean_plan"], title=f"{algo} greedy lap: {ev['clean'].lap_time_s:.2f} s",
+        plotting.plot_plan(course, ev["clean_plan"], title=f"{algo} greedy lap: {ev['clean'].length_m:.2f} m",
                            field_radius=env.field_radius, save=png)
         yml = out_dir / f"{algo}_nominal_path.yaml"
         export.write_nominal_path(yml, ev["clean_plan"], env, solver=algo, lap_mode="single")

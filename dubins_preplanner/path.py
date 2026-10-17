@@ -1,7 +1,6 @@
 """A planned path as a contiguous list of line and arc segments.
 
-This is the shared representation for export, plotting, the flyability check and (later) the dynamic
-planner. Conventions: heading 0 = +x, CCW positive; signed cross-track error is positive to the
+This is the shared representation for export, plotting and (later) the dynamic planner. Conventions: heading 0 = +x, CCW positive; signed cross-track error is positive to the
 **left** of the direction of travel.
 """
 

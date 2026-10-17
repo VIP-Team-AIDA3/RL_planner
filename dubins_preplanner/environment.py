@@ -2,10 +2,10 @@
 
 Layers k = 0..n (n gates): layer k < n is "crossing gate k", layer n is "crossing G1 again" (finish).
 A state is (k, pose_index) flattened as k * P + pose_index; an action is the pose_index to cross the
-next gate at. Consecutive crossings are joined by the shortest Dubins path, so every lap is flyable at
-the planning turn radius by construction.
+next gate at. Consecutive crossings are joined by the shortest Dubins path, so no arc in a lap is
+tighter than the configured turn radius.
 
-Leg cost (seconds) = flight time + lambda * pylon violation + OOB penalty per exit, where the pylon
+Leg cost (meters) = path length + lambda * pylon violation + OOB penalty per exit, where the pylon
 violation is the STL robustness integral  int max(0, R_field - d(s)) ds  over the leg, with d the
 distance to the nearest pylon (as in race_env.py). Touching a pylon makes the leg invalid (cost inf).
 """
@@ -64,14 +64,12 @@ class DubinsGateMDP:
         self.cfg = cfg
         self.rng = rng if rng is not None else np.random.default_rng(cfg.get("rl", {}).get("seed", 0))
 
-        ac, costs = cfg["aircraft"], cfg["costs"]
-        self.airspeed = float(ac["airspeed_mps"])
+        costs = cfg["costs"]
         self.radius = turn_radius_from_cfg(cfg)
         self.field_radius = float(costs["pylon_field_radius_m"]
                                   if costs.get("pylon_field_radius_m") is not None else course.gate_margin_m)
-        self.pylon_weight = float(costs["pylon_penalty_s_per_m2"])
-        self.oob_penalty = float(costs["oob_penalty_s"]
-                                 if costs.get("oob_penalty_s") is not None else course.oob_penalty_s)
+        self.pylon_weight = float(costs["pylon_penalty_m_per_m2"])
+        self.oob_penalty = float(costs["oob_penalty_m"])
         self.oob_mode = costs.get("oob_mode", "penalty")
         if self.oob_mode not in ("penalty", "forbid"):
             raise ValueError(f"oob_mode must be 'penalty' or 'forbid', got {self.oob_mode!r}")
@@ -115,16 +113,15 @@ class DubinsGateMDP:
                     self.oob_exits[k, i, j] = m.oob_exits
                     self.words[k, i, j] = path.word
 
-        self.time_s = self.length_m / self.airspeed
-        self.cost_s = self.costs(self.oob_mode)
-        self.valid = np.isfinite(self.cost_s)
+        self.cost = self.costs(self.oob_mode)
+        self.valid = np.isfinite(self.cost)
 
     def costs(self, oob_mode: str) -> np.ndarray:
         """Leg cost table (n, P, P) under the given OOB mode; ``inf`` marks invalid legs."""
         valid = ~self.collision
         if oob_mode == "forbid":
             valid &= self.oob_exits == 0
-        cost = self.time_s + self.pylon_weight * self.pylon_violation_m2 + self.oob_penalty * self.oob_exits
+        cost = self.length_m + self.pylon_weight * self.pylon_violation_m2 + self.oob_penalty * self.oob_exits
         return np.where(valid, cost, np.inf)
 
     def leg_path(self, k: int, i: int, j: int) -> DubinsPath:
@@ -183,18 +180,18 @@ class DubinsGateMDP:
             if nbrs:
                 realized = int(nbrs[self.rng.integers(len(nbrs))])
 
-        cost = self.cost_s[k, i, realized]
+        cost = self.cost[k, i, realized]
         info = {
             "intended": intended,
             "realized": realized,
-            "cost_s": float(cost),
+            "cost": float(cost),
             "length_m": float(self.length_m[k, i, realized]),
             "oob_exits": int(self.oob_exits[k, i, realized]),
             "min_pylon_dist_m": float(self.min_pylon_dist_m[k, i, realized]),
             "crashed": False,
         }
         self.state = self.encode(k + 1, realized)
-        if not (np.isfinite(self.cost_s[k, i, intended]) and np.isfinite(cost)):
+        if not (np.isfinite(self.cost[k, i, intended]) and np.isfinite(cost)):
             info["crashed"] = True
             return self.state, CRASH_REWARD, True, info
         return self.state, -float(cost), k + 1 == self.n_gates, info

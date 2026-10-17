@@ -22,7 +22,7 @@ def _toy_course():
 def test_shapes(env2):
     n, P = env2.n_gates, env2.P
     assert (n, P) == (6, 50)
-    for arr in (env2.length_m, env2.cost_s, env2.collision, env2.oob_exits, env2.min_pylon_dist_m):
+    for arr in (env2.length_m, env2.cost, env2.collision, env2.oob_exits, env2.min_pylon_dist_m):
         assert arr.shape == (n, P, P)
     assert env2.n_states == (n + 1) * P == 350
     assert env2.n_actions == P
@@ -42,8 +42,8 @@ def test_collision_through_pylon_center():
 def test_collision_leg_costs_inf(env2):
     # Any leg flagged as a collision in the table must be priced at inf.
     assert env2.collision.any()
-    assert np.all(np.isinf(env2.cost_s[env2.collision]))
-    assert np.all(np.isfinite(env2.cost_s[~env2.collision]))
+    assert np.all(np.isinf(env2.cost[env2.collision]))
+    assert np.all(np.isfinite(env2.cost[~env2.collision]))
 
 
 def test_single_oob_exit():
@@ -59,7 +59,7 @@ def test_single_oob_exit():
 def test_forbid_mode_masks_oob():
     cfg = load_config(overrides={"costs": {"oob_mode": "forbid"}})
     env = DubinsGateMDP(load_course(COURSE2), cfg)
-    assert np.all(np.isinf(env.cost_s[env.oob_exits > 0]))
+    assert np.all(np.isinf(env.cost[env.oob_exits > 0]))
 
 
 def test_deterministic_step(env2):
@@ -70,7 +70,7 @@ def test_deterministic_step(env2):
         a = int(rng.choice(env2.valid_actions(s)))
         s2, r, done, info = env2.step(a)
         assert info["realized"] == a and not info["crashed"]
-        assert r == pytest.approx(-env2.cost_s[k, i, a])
+        assert r == pytest.approx(-env2.cost[k, i, a])
         assert done == (k == env2.n_gates - 1)
         s = s2
     assert env2.is_terminal(s)
