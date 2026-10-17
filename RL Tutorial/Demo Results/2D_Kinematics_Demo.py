@@ -24,7 +24,6 @@ class PureKinematicGrid(gym.Env):
         self.lambda_accel = lambda_accel
         self.lambda_smooth = lambda_smooth
         self.num_a_values = num_a_values
-        #TODO: Gym implementation
 
         lower_bounds = np.array([0.0, 0.0, -self.v_max, -self.v_max], dtype=np.float32)
         upper_bounds = np.array([self.grid_size - 1, self.grid_size - 1, self.v_max, self.v_max], dtype=np.float32)
@@ -70,12 +69,12 @@ class PureKinematicGrid(gym.Env):
         accel = self._action_to_accel[action]
         ax, ay = accel
 
-        # previous_accel is now the value of the previous acceleration for the #TODO: reward function
         previous_accel = self.prev_accel
 
         new_vx = vx + (ax * self.dt)
         new_vy = vy + (ay * self.dt)
-        
+
+        #TODO: convert to Matrix Math
         new_px = np.clip(px + (vx * self.dt) + (0.5 * ax * (self.dt ** 2)), 0.0, self.grid_size - 1)
         new_py = np.clip(py + (vy * self.dt) + (0.5 * ay * (self.dt ** 2)), 0.0, self.grid_size - 1)
 
