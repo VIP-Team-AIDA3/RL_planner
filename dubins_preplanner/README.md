@@ -52,18 +52,31 @@ Outputs go to `dubins_preplanner/out/`: `<algo>_path.png`, `<algo>_nominal_path.
      reads the slip probabilities.
    - RL trains from the DP-optimal G1 start pose, with the team's random Q initialization and constant ε.
 
-## Results (course 2, defaults: radius 10.71 m, 60k episodes)
+## Turn radius
 
-| Solver | Noise-free lap | Mean cost, 20% slip | Mean min pylon distance, 20% slip |
-|---|---|---|---|
-| DP (value iteration) | **135.03 m** | **162.0 m** (noise-aware policy) | 3.61 m |
-| Q-learning | 144.87 m (+7.3%) | 170.1 m | 2.27 m |
-| SARSA | 153.47 m (+13.7%) | 182.4 m | 3.15 m |
+`turn_radius_m: 5.0` is the Sport Cub S2 (HobbyZone, about 57 g) flown in SAFE **Experienced** mode,
+which has no bank limit. At about 7 m/s and a 45 deg bank, R = V^2 / (g tan 45) = 5.0 m. The plane's
+speed isn't published, so replace this with a measured value (e.g. a circle fitted to motion-capture
+data of a steady turn) when you have one.
 
-- **Without noise,** Q-learning reaches the exact DP lap at 60k episodes (seeds 0-4).
-- **With slip,** SARSA keeps more pylon clearance than Q-learning; that's the on-policy effect.
-- **Course 1** (`purt_course.yaml`): DP lap 72.33 m (cost 81.59 m, min pylon 2.16 m).
-- **Largest turn radius with a zero-OOB lap** (from earlier sweeps): 11.2 m on course 1, 21.0 m on course 2.
+## Results (defaults: radius 5.0 m, 60k episodes, 20% slip)
+
+| | Course 2 (`purt_course2.yaml`) | Course 1 (`purt_course.yaml`) |
+|---|---|---|
+| DP lap (noise-free) | **123.47 m** | **46.31 m** (cost 46.69 m) |
+| DP, noise-aware, mean cost with slip | 128.5 m | 55.7 m |
+| Q-learning lap (noise-free) | 128.46 m (+4.0%) | 48.56 m (+4.0%) |
+| Q-learning, mean cost with slip | 141.4 m | 58.0 m |
+| SARSA lap (noise-free) | 211.45 m (+81.9%) | 49.66 m (cost 71.86 m, +53.9%) |
+| SARSA, mean cost with slip | 202.9 m | 76.3 m |
+
+- **Neither DP lap leaves the bounds.**
+- **Q-learning:** trained with slip, it gets within about 4% of DP. Without noise it reaches the
+  exact DP lap (the test checks this).
+- **SARSA lags well behind at 60k episodes.** With constant ε = 0.1 over 50 actions, its on-policy
+  values stay pessimistic.
+- **At the previous 10.7 m radius,** laps on course 1 needed big loops outside the bounds: the turn
+  circle (21 m) was wider than the gates. 5 m removes that.
 
 ## Notes
 
