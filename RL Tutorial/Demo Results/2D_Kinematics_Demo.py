@@ -12,14 +12,20 @@ from race_env import RaceEnv, segment_intersection
 from pathlib import Path
 class PureKinematicGrid(gym.Env):
     def __init__(self, grid_size=38, v_max=20, a_max=100, grid_density=20, lambda_accel=0.0001,
-    lambda_smooth=0.0003, num_a_values =11, MAX_STEPS=400, course_path= None, rewards=None):
+    lambda_smooth=0.0003, num_a_values =11, MAX_STEPS=2000, course_path= None, rewards=None, dt=0.1,
+    reward_field_exponent=0.5):
         super().__init__()
         self.grid_size = grid_size
         self.v_max = v_max
         self.v_min = 3.0  # m/s: underspeed penalty applies at or below this speed.
         self.a_max = a_max
         self.grid_density = grid_density # how many sub lines appear between whole integer values
-        self.dt = 1 / self.grid_density #time step changes based on the grid density
+        self.dt = float(dt) # Seconds per action, independent of spatial resolution.
+        if not np.isfinite(self.dt) or self.dt <= 0:
+            raise ValueError("dt must be a finite positive number of seconds.")
+        self.reward_field_exponent = float(reward_field_exponent)
+        if not np.isfinite(self.reward_field_exponent) or not 0 < self.reward_field_exponent < 1:
+            raise ValueError("reward_field_exponent must be between 0 and 1, exclusively.")
         self.plot_dt = self.dt / 2
         self.agent_circle = None
         self.trajectory_line = None
@@ -63,6 +69,8 @@ class PureKinematicGrid(gym.Env):
             "overspeed": -1500.0,
             "underspeed": -5.0,
             "out_of_bounds": -20000.0,
+            "reward_field": 1.0,
+            "progress": 50.0,
         }
         if rewards is not None:
             self.REWARDS.update(rewards)
@@ -215,7 +223,90 @@ class PureKinematicGrid(gym.Env):
             self.fig.canvas.flush_events()
             plt.pause(self.plot_dt)
 
-    # returns a single reward value that is taken into the value function
+    def shortest_distance_vec(self, agent_pos, pylon1_pos, pylon2_pos, Pylon_R):
+        # Returns the shortest distance from the agent to the gate
+        agent_pos = np.asarray(agent_pos, dtype=float)
+        pylon1_pos = np.asarray(pylon1_pos, dtype=float)
+        pylon2_pos = np.asarray(pylon2_pos, dtype=float)
+        d1 = pylon2_pos - pylon1_pos
+        d2 = agent_pos - pylon1_pos
+        d3 = agent_pos - pylon2_pos
+        if np.linalg.norm(d1) <= 2 * Pylon_R:
+            raise ValueError("Pylons must leave a nonzero gate opening.")
+        t = np.dot(d2, d1)/np.dot(d1, d1)
+        margin = Pylon_R/np.linalg.norm(d1)
+        match t:
+            case t if t<margin:
+                vec = d2 - margin*d1
+            case t if t>1-margin:
+                vec = d3 + margin * d1
+            case _:
+                vec = d2 - t*d1
+        return vec
+
+    def segment_proportion(self, r, agent_pos, p1, p2 ,p3, p4, Pylon_R):
+        # Proportion of segment in the pylon circle compared to total segment length
+        r = np.asarray(r, dtype=float)
+        agent_pos = np.asarray(agent_pos, dtype=float)
+        start = agent_pos - r
+        centers = np.asarray([p1, p2, p3, p4], dtype=float)
+        intervals = []
+        a = np.dot(r, r)
+        if a == 0:
+            return 0.0, 0.0
+        for center in centers:
+            offset = start - center
+            # Solve ||start + t*r - center||² <= Pylon_R².
+            b = 2.0 * np.dot(offset, r)
+            c = np.dot(offset, offset) - Pylon_R**2
+            discriminant = b*b - 4.0*a*c
+            if discriminant < 0:
+                continue  # No intersection
+            root = np.sqrt(discriminant)
+            enter = max(0.0, (-b - root) / (2.0*a))
+            leave = min(1.0, (-b + root) / (2.0*a))
+
+            if enter < leave:
+                intervals.append((enter, leave))
+
+        # Merge overlaps so each portion is counted once.
+        proportion1 = 0.0
+        covered_until = 0.0
+        proportion2 = 0.0
+        midpoint_sum = 0.0
+        for enter, leave in sorted(intervals):
+            effective_enter = max(enter, covered_until)
+            length = max(0.0, leave - effective_enter)
+
+            proportion1 += length
+            midpoint_sum += length * (effective_enter + leave) / 2.0
+            covered_until = max(covered_until, leave)
+
+        proportion2 = midpoint_sum / proportion1 if proportion1 > 0 else 0.0
+
+        return float(np.clip(proportion1, 0.0, 1.0)), float(np.clip(proportion2, 0.0, 1.0))
+
+    def gate_order(self):
+        """Return the active gate; after all gates, target G1 again to finish."""
+        if not self.GATES:
+            return None
+        gate_index = self.q if self.q < self.n_gates else 0
+        return self.GATES[gate_index]
+
+    def reward_field(self, state, pylons, gate_segment=None):
+        """Inverse fractional power of gate distance, reduced by pylon obstruction."""
+        if gate_segment is None:
+            gate = self.gate_order()
+            if gate is None:
+                return 0.0
+            gate_segment = (gate["p1"], gate["p2"])
+        r = self.shortest_distance_vec(state[:2], gate_segment[0], gate_segment[1], self.PYLON_FIELD_R_M)
+        proportion1, proportion2 = self.segment_proportion(r, state[:2], pylons[0]['xy'], pylons[1]['xy'], pylons[2]['xy'], pylons[3]['xy'], self.PYLON_FIELD_R_M)
+        # Keep the inverse finite when the agent is on the gate.
+        distance = max(float(np.linalg.norm(r)), 1e-6)
+        return float((1.0 - proportion1) * (1.0 - proportion2)
+                     / distance ** self.reward_field_exponent)
+
     def calculate_reward(self, accel, start_pos, end_pos, pylon_robustness,
                        hit_pylon, out_of_bounds):
         """Combine kinematic penalties and race rewards, advancing gate progress."""
@@ -229,6 +320,8 @@ class PureKinematicGrid(gym.Env):
         # smoothness_penalty = np.sum(delta_accel ** 2)
         # Physical speed: reward is evaluated before observation discretization.
         speed = float(np.linalg.norm(self.state[2:]))
+        field_reward = float(self.REWARDS["reward_field"]
+                             * self.reward_field(self.state, self.PYLONS))
 
         parts = {
             "neutral": float(self.REWARDS["neutral"]),
@@ -241,6 +334,7 @@ class PureKinematicGrid(gym.Env):
             "overspeed": float(self.REWARDS["overspeed"]) if speed > self.v_max else 0.0,
             "underspeed": float(self.REWARDS["underspeed"]) if speed <= self.v_min else 0.0,
             "out_of_bounds": float(self.REWARDS["out_of_bounds"]) if out_of_bounds else 0.0,
+            "reward_field": field_reward,
         }
         event = {"gate_index": None, "gate_name": None, "gate_u": None,
                  "lap_finished": False}
@@ -251,11 +345,11 @@ class PureKinematicGrid(gym.Env):
             and speed <= self.v_max
             and self.GATES
             ):
+            gate = self.gate_order()
             gate_index = self.q if self.q < self.n_gates else 0
-            gate = self.GATES[gate_index]
             # Reward progress toward the current gate before advancing self.q.
             target = (gate["p1"] + gate["p2"]) / 2
-            parts["progress"] = float(50.0 * (
+            parts["progress"] = float(self.REWARDS["progress"] * (
                 np.linalg.norm(start_pos - target) - np.linalg.norm(end_pos - target)
             ))
             crossing = segment_intersection(start_pos, end_pos, gate["p1"], gate["p2"])
