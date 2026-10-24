@@ -18,3 +18,6 @@ Acceleration Based Reward Function: Creating a reward parameter based on the jer
 Quadratic Drag Force Modeling: Adding the quadratic aerodynamic drag force into the kinematics updates to simulate air resistance acting on the agent. Integrating this using the RK4 numerical method (Abishek).
 
 Continuous Grid For Visualization: Adding a separate grid on top of the grid that the agent uses, to show the continous movement of the agent to verify the physics is working as intended (Nelson).
+
+6. Required Imports:
+gymnasium, numpy, matplotlib.pyplot, matplotlib.collections, matplotlib.patches, matplotlib.lines, enum, typing
