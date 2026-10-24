@@ -12,20 +12,15 @@ from race_env import RaceEnv, segment_intersection
 from pathlib import Path
 class PureKinematicGrid(gym.Env):
     def __init__(self, grid_size=38, v_max=20, a_max=100, grid_density=20, lambda_accel=0.0001,
-    lambda_smooth=0.0003, num_a_values =11, MAX_STEPS=2000, course_path= None, rewards=None, dt=0.1,
+    lambda_smooth=0.0003, num_a_values =11, MAX_TIME=200.0, course_path= None, rewards=None, dt=1,
     reward_field_exponent=0.5):
         super().__init__()
         self.grid_size = grid_size
         self.v_max = v_max
         self.v_min = 3.0  # m/s: underspeed penalty applies at or below this speed.
         self.a_max = a_max
-        self.grid_density = grid_density # how many sub lines appear between whole integer values
+        self.grid_density = grid_density # how many sub lines appear between whole integer valu---es
         self.dt = float(dt) # Seconds per action, independent of spatial resolution.
-        if not np.isfinite(self.dt) or self.dt <= 0:
-            raise ValueError("dt must be a finite positive number of seconds.")
-        self.reward_field_exponent = float(reward_field_exponent)
-        if not np.isfinite(self.reward_field_exponent) or not 0 < self.reward_field_exponent < 1:
-            raise ValueError("reward_field_exponent must be between 0 and 1, exclusively.")
         self.plot_dt = self.dt / 2
         self.agent_circle = None
         self.trajectory_line = None
@@ -33,8 +28,9 @@ class PureKinematicGrid(gym.Env):
         self.lambda_accel = lambda_accel
         self.lambda_smooth = lambda_smooth
         self.num_a_values = num_a_values
-        self.MAX_STEPS = MAX_STEPS
+        self.MAX_TIME = float(MAX_TIME)
         self.n_steps = 0
+        self.elapsed_time = 0.0
         self.INIT_STATE = np.array(
         [grid_size / 2, grid_size / 2, 0.0, 0.0],
         dtype=np.float32,
@@ -112,18 +108,17 @@ class PureKinematicGrid(gym.Env):
 
         self.prev_accel = np.zeros(2, dtype=np.float32) # needed for acceleration constraint reward
         self.n_steps = 0
+        self.elapsed_time = 0.0
         self.state_history = [self.state.copy()]
         self.action_history = []
         self.plot_path = []
         return self.get_observation(), self.get_info()  
 
     def step(self, action, ignore_truncation=False): # transition function
-        #TODO: Gym implementation
         px, py, vx, vy = self.state
         accel = self._action_to_accel[action]
         ax, ay = accel
 
-        # previous_accel is now the value of the previous acceleration for the #TODO: reward function
         previous_accel = self.prev_accel
 
         A = np.array([
@@ -172,9 +167,11 @@ class PureKinematicGrid(gym.Env):
         self.prev_accel = accel.copy()
         terminated = bool(out_of_bounds or hit_pylon or event["lap_finished"] or np.linalg.norm(self.state[2:]) > self.v_max)
 
+        self.n_steps += 1
+        self.elapsed_time = self.n_steps * self.dt
+
         if not ignore_truncation:
-            self.n_steps += 1
-            truncated = self.n_steps >= self.MAX_STEPS
+            truncated = self.elapsed_time >= self.MAX_TIME
         self.state_history.append(self.state.copy())
         self.action_history.append(action)
 
@@ -198,7 +195,7 @@ class PureKinematicGrid(gym.Env):
 
     def get_info(self):
         return {"state_history": self.state_history, "action_history": self.action_history,
-                "q": self.q}
+                "q": self.q, "elapsed_time": self.elapsed_time}
 
     def plot_step(self, start_state, action):
         """Animate the continuous motion for one step without changing env.state."""
