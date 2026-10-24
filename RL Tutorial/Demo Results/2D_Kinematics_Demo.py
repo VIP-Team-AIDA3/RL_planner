@@ -215,7 +215,7 @@ class PureKinematicGrid(gym.Env):
             self.fig.canvas.flush_events()
             plt.pause(self.plot_dt)
 
-
+    # returns a single reward value that is taken into the value function
     def calculate_reward(self, accel, start_pos, end_pos, pylon_robustness,
                        hit_pylon, out_of_bounds):
         """Combine kinematic penalties and race rewards, advancing gate progress."""
@@ -361,7 +361,7 @@ class PureKinematicGrid(gym.Env):
         if self.fig is not None:
             plt.close(self.fig)
             self.fig = None
-            self.ax = None
+            self.ax = Nonedis
 
 if __name__ == "__main__":
     env = PureKinematicGrid()
