@@ -10,43 +10,56 @@ from enum import Enum
 from typing import Optional
 from race_env import RaceEnv, segment_intersection
 from pathlib import Path
+
 class PureKinematicGrid(gym.Env):
-    def __init__(self, grid_size=38, v_max=20, a_max=100, grid_density=20, lambda_accel=0.0001,
-    lambda_smooth=0.0003, num_a_values =11, MAX_TIME=200.0, course_path= None, rewards=None, dt=1,
-    reward_field_exponent=0.5):
+    def __init__(self, grid_size=38, v_max=8.0, a_max=4.92, grid_density=20, lambda_accel=0.0001,
+    lambda_smooth=0.0003, MAX_TIME=200.0, course_path= None, rewards=None, dt=0.1,
+    reward_field_exponent=0.5, num_a_values=4, num_angle_values=12):
         super().__init__()
         self.grid_size = grid_size
+        self.grid_density = grid_density # how many sub lines appear between whole integer values
+
         self.v_max = v_max
-        self.v_min = 3.0  # m/s: underspeed penalty applies at or below this speed.
+        self.v_min = 3.39  # m/s: underspeed penalty applies at or below this speed. Stall Speed
+        self.v_cruise = 4.83 # airborne starting speed m/s
+        self.max_turn_rate_rad_s = np.deg2rad(30.0)
+
         self.a_max = a_max
-        self.grid_density = grid_density # how many sub lines appear between whole integer valu---es
+        self.num_a_values = int(num_a_values)
+        self.num_angle_values = int(num_angle_values)
+
+        self.reward_field_exponent = reward_field_exponent
+
+        self.integration_dt = 0.01 # internal max integration substep -> the physics is eval every 0.01 seconds but the agent chooses an action every 0.1 seconds
         self.dt = float(dt) # Seconds per action, independent of spatial resolution.
-        self.plot_dt = self.dt / 2
+        self.plot_dt = min(self.dt / 10.0, 0.01)
+
         self.agent_circle = None
         self.trajectory_line = None
         self.plot_path = []
         self.lambda_accel = lambda_accel
         self.lambda_smooth = lambda_smooth
-        self.num_a_values = num_a_values
+
         self.MAX_TIME = float(MAX_TIME)
         self.n_steps = 0
         self.elapsed_time = 0.0
+
+        # the state includes [x, y, velocity, direction of velocity (angle in radians, psi)]
         self.INIT_STATE = np.array(
-        [grid_size / 2, grid_size / 2, 0.0, 0.0],
+        [grid_size / 2, grid_size / 2, self.v_cruise, 0.0],
         dtype=np.float32,
         )
+
         self.state = self.INIT_STATE.copy()
-        self.n_steps = 0
         self.state_history = [self.state.copy()]
         self.action_history = []
-        self.n_steps = 0
-        self.state_history = [self.INIT_STATE]
-        self.action_history = []
+        self._last_step_path = [self.state[:2].copy()] # stores immediate positions when turning
 
+        # Selecting course yaml file
         if course_path is None:
             course_path = (
             Path(__file__).resolve().parents[2]
-            / "ros2_ws/src/pylon_2026_world/purt_course_3.yaml"
+            / "ros2_ws/src/pylon_2026_world/purt_course2.yaml"
         )
         self.race_env = RaceEnv(course_path)
         # Inside PureKinematicGrid.__init__()
@@ -72,120 +85,277 @@ class PureKinematicGrid(gym.Env):
             self.REWARDS.update(rewards)
         self.q = 0
 
-        #TODO: Gym implementation
+        # Observation space, [x, y, speed, psi, gate_progress (q), prev_a, prev_beta (direction of acceleration relative to velocity, angle in radians)]
+        lower_bounds = np.array(
+            [0.0, 0.0, self.v_min, -np.pi, 0.0, 0.0, -np.pi], 
+            dtype=np.float32)
+        upper_bounds = np.array(
+            [self.grid_size - 1, self.grid_size - 1, self.v_max, np.pi, self.n_gates, self.a_max, np.pi], 
+            dtype=np.float32)
+        self.observation_space = spaces.Box(
+            low=lower_bounds, high=upper_bounds, shape=(7,), dtype=np.float32) # observation space with bounds specified above
 
-        lower_bounds = np.array([0.0, 0.0, -self.v_max, -self.v_max, 0.0, -self.a_max, -self.a_max], dtype=np.float32)
-        upper_bounds = np.array([self.grid_size - 1, self.grid_size - 1, self.v_max, self.v_max, self.n_gates, self.a_max, self.a_max], dtype=np.float32)
-        # tells the agent what the state space is bounded to
-        self.observation_space = spaces.Box(low=lower_bounds, high=upper_bounds, shape=(7,), dtype=np.float32)
+        # Accel magnitude bins, goes from 0 to a_max with 3 bins
+        reference_magnitudes = np.array([0.0, 1.5, 3.0, 4.92])
 
-        accel_values = np.linspace(-self.a_max, self.a_max, self.num_a_values)
+        accel_magnitudes = np.interp(
+            np.linspace(0, 3, self.num_a_values),
+            np.arange(4),
+            reference_magnitudes,
+        ) * (self.a_max / 4.92)
 
-        self._action_to_accel = {}
+        # Accel direction bins
+        directions_deg = (
+            np.arange(self.num_angle_values) - self.num_angle_values // 2 # // is division and then floors the value
+        ) * (360.0 / self.num_angle_values)
 
-        for ax in accel_values:
-            for ay in accel_values:
-                if np.hypot(ax, ay) <= self.a_max:        
-                    self._action_to_accel[len(self._action_to_accel)] = np.array([ax, ay], dtype=np.float32)
+        # Create all polar actions
+        self.action_to_polar = {0: (0.0, 0.0)} # initializing variable
 
-        self.action_space = spaces.Discrete(len(self._action_to_accel))
+        for magnitude in accel_magnitudes[1:]:
+            for direction in directions_deg:
+                idx = len(self.action_to_polar) # idx starts as 1, basically the idx is the action selection
+
+                self.action_to_polar[idx] = (float(magnitude), float(np.deg2rad(direction)))
+
+        self.action_space = spaces.Discrete(len(self.action_to_polar))
 
         self.prev_accel = np.zeros(2, dtype=np.float32)
-        self.state = np.array([self.grid_size / 2, self.grid_size / 2, 0.0, 0.0], dtype=np.float32)
         
         self.fig = None
         self.ax = None
 
-    def reset(self, seed: Optional[int] = None, x=None, y=None, vx=None, vy=None, options=None):
+    def reset(self, seed: Optional[int] = None, x=None, y=None, speed=None, psi_deg=None, options=None): # resets the environment to the default starting state
         super().reset(seed=seed)
         self.q = 0
-        self.state = np.array([
-        self.INIT_STATE[0] if x is None else x,
-        self.INIT_STATE[1] if y is None else y,
-        self.INIT_STATE[2] if vx is None else vx,
-        self.INIT_STATE[3] if vy is None else vy,
-        ], dtype=np.float32)
 
-        self.prev_accel = np.zeros(2, dtype=np.float32) # needed for acceleration constraint reward
+        initial_speed = self.v_cruise if speed is None else float(speed)
+
+        if not (self.v_min <= initial_speed <= self.v_max):
+            raise ValueError("Initial airborne speed must lie in [v_min, v_max]")
+
+        initial_angle = 0.0 if psi_deg is None else np.deg2rad(psi_deg)
+
+        self.state = np.array([self.INIT_STATE[0] if x is None else x, 
+                               self.INIT_STATE[1] if y is None else y, 
+                               initial_speed, 
+                               self.wrap_angle(initial_angle)], dtype=np.float32)
+
+        self.prev_accel = np.zeros(2, dtype=np.float32)
         self.n_steps = 0
         self.elapsed_time = 0.0
         self.state_history = [self.state.copy()]
         self.action_history = []
         self.plot_path = []
-        return self.get_observation(), self.get_info()  
+        self._last_step_path = [self.state[:2].copy()]
 
-    def step(self, action, ignore_truncation=False): # transition function
-        px, py, vx, vy = self.state
-        accel = self._action_to_accel[action]
-        ax, ay = accel
+        return self.get_observation(), self.get_info
 
-        previous_accel = self.prev_accel
+    @staticmethod
+    def wrap_angle(angle): # wraps all angles into the [-pi, pi) range, eg. 2pi -> 0
+        """Wrap a course angle [-pi, pi)"""
+        return (float(angle) + np.pi) % (2.0 * np.pi) - np.pi
 
-        A = np.array([
-            [1, 0, self.dt, 0],
-            [0, 1, 0 , self.dt],
-            [0, 0, 1, 0],
-            [0, 0, 0, 1]
-        ])
+    def integrate_polar_action(self, action):
+        """Move a 2D point using polar acceleration and velocity."""
 
-        B = np.array([
-            [0.5 * (self.dt ** 2), 0],
-            [0, 0.5 * (self.dt ** 2)],
-            [self.dt, 0],
-            [0, self.dt]
-        ])
-        prev_xy = self.state[:2].copy()
-        self.state = A @ self.state + B @ accel
-        # Check the actual position; preserve boundary violations in the physical state.
-        out_of_bounds = bool(
-            np.any(self.state[:2] < 0.0)
-            or np.any(self.state[:2] > self.grid_size - 1)
-        )
+        # RL chooses acceleration magnitude and relative direction
+        a_mag, beta = self.action_to_polar[int(action)]
+        x, y, speed, psi = map(float, self.state)
 
-        # new_vx = vx + (ax * self.dt)
-        # new_vy = vy + (ay * self.dt)
-        
-        # new_px = np.clip(px + (vx * self.dt) + (0.5 * ax * (self.dt ** 2)), 0.0, self.grid_size - 1)
-        # new_py = np.clip(py + (vy * self.dt) + (0.5 * ay * (self.dt ** 2)), 0.0, self.grid_size - 1)
+        a_forward = a_mag * np.cos(beta) # changes speed in direction of travel
+        a_side = a_mag * np.sin(beta) # changes the direction of velocity
 
-        # self.state = np.array([new_px, new_py, new_vx, new_vy], dtype=np.float32)
+        # Limit heading change over one RL action interval
+        max_delta_psi = self.max_turn_rate_rad_s * self.dt
 
-        
+        final_forward_speed = speed + a_forward * self.dt
+        max_side = (final_forward_speed * np.tan(max_delta_psi) / self.dt)
 
-        truncated = False # True if max episode steps are reached
+        a_side = np.clip(a_side, -max_side, max_side)
 
-        # One pass of pylon distances serves both the collision test and the robustness signal:
-                # a hit is "inside a pylon's physical radius", and rho measures the nearest approach.
+        # Converting acceleration to cartesian
+        ax = a_forward * np.cos(psi) - a_side * np.sin(psi)
+        ay = a_forward * np.sin(psi) + a_side * np.cos(psi)
+
+        # Converting polar vel to cartesian
+        vx = speed * np.cos(psi)
+        vy = speed * np.sin(psi)
+
+        # Physics integration substeps
+    
+        # Multi rate simulation: the RL agent selects a new action every
+        # self.dt seconds (10 Hz by default), while the physics updates
+        # at a higher frequency (100 Hz by default).
+        # Hold the agent's action constant during these physics substeps.
+        # Calculate enough substeps to cover the full control interval (stored in n_substeps),
+        # with at least 10 substeps for accuracy.
+        # sub_dt makes sure their durations sum to exactly self.dt.
+        # The RL agent selects actions at 10 Hz, while the physics
+        # integrates at 100 Hz using the same held command.
+        # This does not introduce noise, but limits how quickly
+        # the agent can respond to disturbances or changing conditions.
+        # Actual disturbances and sensor noise must be modeled separately.
+        n_substeps = max(10, int(np.ceil(self.dt / self.integration_dt)))
+
+        sub_dt = self.dt / n_substeps
+        path = [np.array([x, y])]
+
+        for _ in range(n_substeps):
+            # Constant acceleration kinematics
+            x += vx * sub_dt + 0.5 * ax * sub_dt**2
+            y += vy * sub_dt + 0.5 * ay * sub_dt**2
+
+            # New velocities, not used for the current position update
+            vx += ax * sub_dt
+            vy += ay * sub_dt
+
+            path.append(np.array([x, y]))
+
+        # Converting updated vel back to polar
+        new_speed = np.hypot(vx, vy)
+        new_psi = np.arctan2(vy, vx) if new_speed > 1e-9 else psi
+
+        self.state = np.array([x, y, new_speed, self.wrap_angle(new_psi)], dtype=np.float32)
+
+        return path, {
+        "requested_a_m_s2": float(a_mag),
+        "requested_beta_deg": float(np.rad2deg(beta)),
+        "applied_forward_a_m_s2": float(a_forward),
+        "max_applied_lateral_a_m_s2": float(abs(a_side)),
+        "achieved_avg_turn_rate_deg_s": float(
+            abs(np.rad2deg(self.wrap_angle(new_psi - psi))) / self.dt
+        ), }
+
+    def step(self, action, ignore_truncation=False):
+        # Store prev state
+        start_state = self.state.copy()
+        prev_xy = start_state[:2].copy()
+
+        # Update pos and vel using polar kinematics
+        path, control_info = self.integrate_polar_action(action)
+
+        # Save calculated trajectory for plotting
+        self._last_step_path = path
         new_xy = self.state[:2].copy()
-        distances = self.race_env.pylon_distances(prev_xy, new_xy)
-        nearest_pylon_m = float(np.min(distances))
-        pylon_robustness = self.race_env.pylon_robustness(distances)
-        hit_pylon = (not out_of_bounds) and bool(np.any(distances <= [p["r"] for p in self.PYLONS]))
-        reward, reward_parts, event = self.calculate_reward(
-            accel, prev_xy, new_xy, pylon_robustness, hit_pylon, out_of_bounds
-        )
-        self.prev_accel = accel.copy()
-        terminated = bool(out_of_bounds or hit_pylon or event["lap_finished"] or np.linalg.norm(self.state[2:]) > self.v_max)
 
+        # Get the commanded polar accel
+        a_mag, beta = self.action_to_polar[int(action)]
+
+        # Converting init vel to cartesian
+        prev_velocity_xy = start_state[2] * np.array([
+            np.cos(start_state[3]),
+            np.sin(start_state[3])
+        ])
+
+        # Converting final vel to cartesian
+        new_velocity_xy = self.state[2] * np.array([
+            np.cos(self.state[3]),
+            np.sin(self.state[3])
+        ])
+
+        # Calculate actual average Cartesian acceleration
+        accel_xy = (new_velocity_xy - prev_velocity_xy) / self.dt
+
+        # Check if the aircraft left the boundaries
+        out_of_bounds = any(
+            np.any(xy < 0.0)
+            or np.any(xy > self.grid_size - 1)
+            for xy in path
+        )
+
+        # Check pylon distances along each trajectory substep
+        distances_by_segment = [
+            np.asarray(
+                self.race_env.pylon_distances(p0, p1),
+                dtype=float
+            )
+
+            for p0, p1 in zip(path[:-1], path[1:]) # changed this b/c the point can be curving toward a pylon
+        ]
+
+        # Closest approach to each pylon over the whole step
+        distances = np.min(
+            np.stack(distances_by_segment),
+            axis=0
+        )
+
+        nearest_pylon_m = float(np.min(distances))
+
+        pylon_robustness = self.race_env.pylon_robustness(
+            distances
+        )
+
+        hit_pylon = bool(np.any(
+            distances <= np.array(
+                [p["r"] for p in self.PYLONS]
+            )
+        ))
+
+        # Speed constraints
+        speed = float(self.state[2])
+
+        stalled = speed < self.v_min
+        overspeed = speed > self.v_max
+
+        # Calculate reward and gate progress
+        reward, reward_parts, event = self.calculate_reward(
+            accel_xy,
+            prev_xy,
+            new_xy,
+            pylon_robustness,
+            hit_pylon,
+            out_of_bounds,
+            path=path
+        )
+
+        # Store previous commanded polar acceleration
+        self.prev_accel = np.array(
+            [a_mag, beta],
+            dtype=np.float32
+        )
+
+        # Episode termination conditions
+        terminated = bool(
+            out_of_bounds
+            or hit_pylon
+            or stalled
+            or overspeed
+            or event["lap_finished"]
+        )
+
+        # Preserve the new time based episode tracking
         self.n_steps += 1
         self.elapsed_time = self.n_steps * self.dt
 
-        if not ignore_truncation:
-            truncated = self.elapsed_time >= self.MAX_TIME
-        self.state_history.append(self.state.copy())
-        self.action_history.append(action)
+        truncated = (
+            not ignore_truncation
+            and self.elapsed_time >= self.MAX_TIME
+        )
 
+        # Save histories
+        self.state_history.append(self.state.copy())
+        self.action_history.append(int(action))
+
+        # Return diagnostic information
         info = self.get_info()
+
         info.update({
             "prev_xy": prev_xy,
             "new_xy": new_xy,
             "out_of_bounds": out_of_bounds,
             "hit_pylon": hit_pylon,
+            "stalled": stalled,
+            "overspeed": overspeed,
+            "speed_m_s": speed,
+            "course_deg": float(np.rad2deg(self.state[3])),
             "nearest_pylon_m": nearest_pylon_m,
             "pylon_robustness": pylon_robustness,
             "reward_parts": reward_parts,
+            **control_info,
             **event,
         })
+
         return self.get_observation(), reward, terminated, truncated, info
 
     def get_observation(self):
@@ -198,27 +368,37 @@ class PureKinematicGrid(gym.Env):
                 "q": self.q, "elapsed_time": self.elapsed_time}
 
     def plot_step(self, start_state, action):
-        """Animate the continuous motion for one step without changing env.state."""
+        """Animate the trajectory calculated by integrate_polar_action()."""
+
         if self.ax is None or self.agent_circle is None:
-            raise RuntimeError("Call render() once before plot_step().")
+            raise RuntimeError(
+                "Call render() once before plot_step()."
+            )
 
-        px, py, vx, vy = start_state
-        accel = self._action_to_accel[action]
-        ax, ay = accel
-        frame_count = max(1, int(np.ceil(self.dt / self.plot_dt)))
-        frame_times = np.linspace(0.0, self.dt, frame_count + 1)[1:]
+        # Use the already-calculated intermediate positions
+        for xy in self._last_step_path[1:]:
 
-        for t in frame_times:
-            x = px + vx * t + 0.5 * ax * t**2
-            y = py + vy * t + 0.5 * ay * t**2
-            self.agent_circle.set_center((x, y))
-            self.plot_path.append((x, y))
+            self.agent_circle.set_center(
+                (float(xy[0]), float(xy[1]))
+            )
+
+            self.plot_path.append(
+                np.asarray(xy, dtype=float).copy()
+            )
+
             path = np.asarray(self.plot_path)
-            self.trajectory_line.set_data(path[:, 0], path[:, 1])
+
+            self.trajectory_line.set_data(
+                path[:, 0],
+                path[:, 1]
+            )
 
             self.fig.canvas.draw_idle()
             self.fig.canvas.flush_events()
-            plt.pause(self.plot_dt)
+
+            plt.pause(
+                self.dt / (len(self._last_step_path) - 1)
+            )
 
     def shortest_distance_vec(self, agent_pos, pylon1_pos, pylon2_pos, Pylon_R):
         # Returns the shortest distance from the agent to the gate
@@ -305,7 +485,7 @@ class PureKinematicGrid(gym.Env):
                      / distance ** self.reward_field_exponent)
 
     def calculate_reward(self, accel, start_pos, end_pos, pylon_robustness,
-                       hit_pylon, out_of_bounds):
+                       hit_pylon, out_of_bounds, path=None):
         """Combine kinematic penalties and race rewards, advancing gate progress."""
         # add reward for accelerating too much as a penalty as it requires more energy for the drone 
         # add reward for continousness of acceleration rather than abrupt discrete changes in acceleration
@@ -316,7 +496,7 @@ class PureKinematicGrid(gym.Env):
         # delta_accel = accel - self.prev_accel
         # smoothness_penalty = np.sum(delta_accel ** 2)
         # Physical speed: reward is evaluated before observation discretization.
-        speed = float(np.linalg.norm(self.state[2:]))
+        speed = float(self.state[2])
         field_reward = float(self.REWARDS["reward_field"]
                              * self.reward_field(self.state, self.PYLONS))
 
@@ -339,7 +519,7 @@ class PureKinematicGrid(gym.Env):
         if (
             not hit_pylon
             and not out_of_bounds
-            and speed <= self.v_max
+            and self.v_min <= speed <= self.v_max # checking both speed limits before awarding a gate crossing
             and self.GATES
             ):
             gate = self.gate_order()
@@ -349,7 +529,30 @@ class PureKinematicGrid(gym.Env):
             parts["progress"] = float(self.REWARDS["progress"] * (
                 np.linalg.norm(start_pos - target) - np.linalg.norm(end_pos - target)
             ))
-            crossing = segment_intersection(start_pos, end_pos, gate["p1"], gate["p2"])
+
+            # Check each intermediate segment of the trajectory
+            crossing = None
+
+            segments = (
+                zip(path[:-1], path[1:])
+                if path is not None
+                else [(start_pos, end_pos)]
+            )
+
+            for p0, p1 in segments:
+
+                crossing = segment_intersection(
+                    p0,
+                    p1,
+                    gate["p1"],
+                    gate["p2"]
+                )
+
+                if crossing is not None:
+                    break
+
+            # above block of code used to be crossing = segment_intersection(start_pos, end_pos, gate["p1"], gate["p2"])
+            
             if crossing is not None:
                 _, u = crossing
                 event.update({"gate_index": gate_index, "gate_name": gate["name"],
@@ -363,32 +566,47 @@ class PureKinematicGrid(gym.Env):
 
         return float(sum(parts.values())), parts, event
         
-
     def discretize_state(self, state):
-        """Return a rounded, bounded observation without changing the physical state."""
+        """Discretize position, speed, and course angle independently."""
 
-        lower = np.array([0, 0, -self.v_max, -self.v_max])
-        upper = np.array([
-            self.grid_size - 1, self.grid_size - 1,
-            self.v_max, self.v_max,
-        ])
+        obs = np.asarray(state, dtype=float).copy()
 
-        return np.clip(
-            np.round(state * self.grid_density) / self.grid_density,
-            lower,
-            upper,
-        ).astype(np.float32)
+        # Discretize x/y pos using the grid density
+        obs[:2] = np.clip(np.round(obs[:2] * self.grid_density) / self.grid_density,
+            0.0,
+            self.grid_size - 1)
 
-    def noise(self, state, pos_noise_std=0.1, vel_noise_std=0.1):
-        """Add measurement noise to a copy of the supplied state."""
-        noisy_state = state.copy()
-        noisy_state[:2] += self.np_random.normal(0, pos_noise_std, size=2)
-        noisy_state[2:] += self.np_random.normal(0, vel_noise_std, size=2)
+        # Discretize speed into 0.25 m/s intervals
+        obs[2] = np.clip(np.round(obs[2] / 0.25) * 0.25,
+            self.v_min,
+            self.v_max)
+        
+        # Discretize angle into 10-degree intervals
+        heading_bin = np.deg2rad(10.0)
+        obs[3] = self.wrap_angle(np.round(self.wrap_angle(obs[3]) / heading_bin) * heading_bin)
+
+        return obs.astype(np.float32)
+
+    def noise(self, state, pos_noise_std=0.1, speed_noise_std=0.1, heading_noise_deg=0.1):
+        """Add measurement noise without changing the physical state."""
+
+        # Pos measurement noise
+        noisy_state = state.astype(float).copy()
+        noisy_state[:2] += self.np_random.normal(0.0, pos_noise_std, size=2)
+
+        # Speed measurement noise
+        noisy_state[2] += self.np_random.normal(0.0, speed_noise_std)
+
+        # Angle measurement noise
+        noisy_state[3] = self.wrap_angle(
+            noisy_state[3] + self.np_random.normal(0.0, np.deg2rad(heading_noise_deg))
+        )
+
         return noisy_state
 
     def render(self, discrete_state):
         """Draw the discrete position and velocity supplied by the caller."""
-        position, velocity = discrete_state[:2], discrete_state[2:4]
+        position = discrete_state[:2]
         if self.fig is None or self.ax is None:
             self.fig, self.ax = plt.subplots()
             self.ax.set_xlim(0, self.grid_size)
@@ -452,19 +670,52 @@ class PureKinematicGrid(gym.Env):
         if self.fig is not None:
             plt.close(self.fig)
             self.fig = None
-            self.ax = Nonedis
+            self.ax = None
 
 if __name__ == "__main__":
-    env = PureKinematicGrid()
-    state, _ = env.reset()
-    env.render(state)
+    env = PureKinematicGrid(
+        num_a_values=4,
+        num_angle_values=12
+    )
 
-    for _ in range(1000):
-        action = np.random.choice(list(env._action_to_accel.keys()))
-        start_state = env.state.copy()
-        discrete_state, reward, terminated, truncated, info = env.step(action)
-        env.plot_step(start_state, action)
-        if terminated or truncated:
-            break
+    observation, info = env.reset(
+        speed=4.83,
+        psi_deg=0
+    )
 
-    plt.show()
+    # TEST 1: Verify basic polar kinematics and action space setup.
+    # Confirm the environment initializes correctly with 37 actions (hand calc gives 37 as the verifiable number).
+    # Apply an acceleration defined by magnitude and relative angle, then verify that the position, speed, and course angle update correctly
+    # (comparing to hand calculations, the values given by the code are correct).
+    # Also looking at the resulting average turn rate. PASSES THIS CHECK
+    print("Initial state:", env.state)
+    print("Number of actions:", env.action_space.n)
+
+    action = env.action_space.sample()
+
+    observation, reward, terminated, truncated, info = env.step(action)
+
+    print("New state:", env.state)
+    print("Requested acceleration:", info["requested_a_m_s2"])
+    print("Acceleration angle:", info["requested_beta_deg"])
+    print("Achieved average turn rate:", info["achieved_avg_turn_rate_deg_s"])
+
+
+    # TEST 2: Verify the maximum turn-rate constraint.
+    # Apply maximum acceleration (4.92 m/s^2) at 90 degrees
+    # relative to the velocity, requesting a sharp left turn.
+    # Confirm that the resulting course change does not exceed
+    # 3 degrees over one 0.1-second RL control interval,
+    # corresponding to the imposed 30 deg/s average turn-rate limit. PASSES THIS CHECK.
+    env.reset(speed=4.83, psi_deg=0)
+
+    action = next(
+        i for i, (a, beta) in env.action_to_polar.items()
+        if np.isclose(a, 4.92)
+        and np.isclose(beta, np.pi / 2)
+    )
+
+    obs, reward, terminated, truncated, info = env.step(action)
+
+    print("New state:", env.state)
+    print("Average turn rate:", info["achieved_avg_turn_rate_deg_s"])
