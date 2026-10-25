@@ -16,13 +16,6 @@ from abc import ABC, abstractmethod
 # fields through the root offset and vtable.
 STICK_COMMAND_BYTES = 56
 
-LOG_FIELDS = [
-    "t", "east", "north", "up", "roll", "pitch", "yaw_enu", "airspeed",
-    "throttle", "elevator", "aileron", "rudder",
-    "airborne", "current_wp", "target_x", "target_y", "target_z",
-    "des_heading", "chi_err", "v_est", "gamma_est",
-]
-
 import gymnasium as gym
 from flight_controller import FlightController
 

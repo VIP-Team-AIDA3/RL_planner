@@ -58,7 +58,7 @@ class CustomTECS(FlightController):
     
     def step(self, observation: dict[str, float], action: dict[str, float], dt: float) -> dict[str, float]:        
         # Total Energy Rate Error (Throttle Loop)
-        edot_curr = observation.get("gamma_est") + (observation.get("v_est") * action.get("vdot_des")) / self.g
+        edot_curr = observation.get("gamma_est") + (observation.get("v_est") * observation.get("vdot_est")) / self.g
         edot_cmd = action.get("gamma_des") + (observation.get("v_est") * action.get("vdot_des")) / self.g
 
         # Bank angle load factor compensation (n = 1 / cos(phi))
@@ -66,7 +66,7 @@ class CustomTECS(FlightController):
         roll_drag_boost = self.K_R2T * (load_factor - 1.0)
         
         # Total Throttle Command
-        throttle_cmd = self.ThrottlePID.step(edot_cmd, edot_curr, dt) + self.trim_th + roll_drag_boost
+        throttle_cmd = min(max(self.ThrottlePID.step(edot_cmd, edot_curr, dt) + self.trim_th + roll_drag_boost, 0), 1)
         
         # 2. Energy Distribution Rate Error (Elevator Loop)
         # Account for the vertical component reduction due to bank angle
@@ -82,8 +82,7 @@ class CustomTECS(FlightController):
         # Rudder Command
         rudder_cmd = self.RudderPID.step(0, observation.get("beta_est"), dt)
         
-        # Output clamping (Normalized: Throttle [0, 1], Elevator [-1, 1])
-        return {"throttle": throttle_cmd, "elevator": elevator_cmd, "aileron": aileron_cmd, "rudder": rudder_cmd}
+        return {"throttle": max(throttle_cmd, 0.001), "elevator": elevator_cmd, "aileron": aileron_cmd, "rudder": rudder_cmd}
         
     def reset(self):
         self.ThrottlePID.reset()
