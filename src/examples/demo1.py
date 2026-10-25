@@ -43,7 +43,7 @@ class CustomTECS(FlightController):
         k_yp=1.0,
         k_yi=0.0,
         k_yd=0.1,
-        trim_throttle=0,
+        trim_throttle=0.0,
         g=9.81
     ):
         self.K_R2T = k_r2t
@@ -51,10 +51,10 @@ class CustomTECS(FlightController):
         self.g = g
 
         # PID Control
-        self.ThrottlePID = PIDController(k_tp, k_ti, 0, (0,1))
-        self.ElevatorPID = PIDController(k_ep, k_ei, 0, (-1,1))
-        self.AileronPID = PIDController(k_rp, k_ri, k_rd, (-1,1))
-        self.RudderPID = PIDController(k_yp, k_yi, k_yd, (-1,1))
+        self.ThrottlePID = PIDController(k_tp, k_ti, 0, (0.0,1.0))
+        self.ElevatorPID = PIDController(k_ep, k_ei, 0, (-1.0,1.0))
+        self.AileronPID = PIDController(k_rp, k_ri, k_rd, (-1.0,1.0))
+        self.RudderPID = PIDController(k_yp, k_yi, k_yd, (-1.0,1.0))
     
     def step(self, observation: dict[str, float], action: dict[str, float], dt: float) -> dict[str, float]:        
         # Total Energy Rate Error (Throttle Loop)
@@ -66,7 +66,7 @@ class CustomTECS(FlightController):
         roll_drag_boost = self.K_R2T * (load_factor - 1.0)
         
         # Total Throttle Command
-        throttle_cmd = min(max(self.ThrottlePID.step(edot_cmd, edot_curr, dt) + self.trim_th + roll_drag_boost, 0), 1)
+        throttle_cmd = min(max(self.ThrottlePID.step(edot_cmd, edot_curr, dt) + self.trim_th + roll_drag_boost, 0.0), 1.0)
         
         # 2. Energy Distribution Rate Error (Elevator Loop)
         # Account for the vertical component reduction due to bank angle
@@ -82,7 +82,7 @@ class CustomTECS(FlightController):
         # Rudder Command
         rudder_cmd = self.RudderPID.step(0, observation.get("beta_est"), dt)
         
-        return {"throttle": max(throttle_cmd, 0.001), "elevator": elevator_cmd, "aileron": aileron_cmd, "rudder": rudder_cmd}
+        return {"throttle": throttle_cmd, "elevator": elevator_cmd, "aileron": aileron_cmd, "rudder": rudder_cmd}
         
     def reset(self):
         self.ThrottlePID.reset()
@@ -93,7 +93,7 @@ class CustomTECS(FlightController):
 def main():
     demo_env = CustomEnv(CustomTECS())
     while demo_env.prev_t < 10:
-        demo_env.step({"vdot_des":0, "psidot_des":math.pi/6, "gamma_des":0}, realtime=True)
+        demo_env.step({"vdot_des":0.0, "psidot_des":math.pi/6, "gamma_des":0.0}, realtime=True)
     demo_env.cleanup_sim()
     
 if __name__ == "__main__":
