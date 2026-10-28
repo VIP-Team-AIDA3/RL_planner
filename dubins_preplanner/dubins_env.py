@@ -34,11 +34,11 @@ CRASH_REWARD = -1000.0
 
 class DubinsGateEnv(gym.Env):
     def __init__(self, course_path, TURN_RADIUS_M=10.71, N_CROSSING_POINTS=5, HEADING_OFFSETS_DEG=(-60, -30, 0, 30, 60),
-                 SAMPLE_DS_M=0.1, PYLON_PENALTY=7.0, OOB_PENALTY=35.0, NOISE=0.0, INIT_POSE=None):
+                 SAMPLE_DS_M=0.1, PYLON_PENALTY=1000.0, OOB_PENALTY=1000.0, NOISE=0.0, INIT_POSE=None):
         super(DubinsGateEnv, self).__init__()
         self.COURSE_PATH = str(course_path)
         course_path = Path(course_path) if Path(course_path).is_absolute() else REPO_ROOT / course_path
-        self.course = RaceEnv(str(course_path))  # pylons, gates, safety radius and render(), as the team uses them
+        self.course = RaceEnv(str(course_path))  
 
         with open(course_path) as f:
             bounds = yaml.safe_load(f)["bounds_rect"]
@@ -87,6 +87,7 @@ class DubinsGateEnv(gym.Env):
         self.violation_m2 = np.zeros((n, P, P))
         self.oob_exits = np.zeros((n, P, P), dtype=int)
         self.collision = np.zeros((n, P, P), dtype=bool)
+        self.regate = np.zeros((n, P, P), dtype=bool)  # leg crosses its start or end gate a second time
 
         pylon_xy = np.array([p["xy"] for p in self.course.PYLONS])
         pylon_r = np.array([p["r"] for p in self.course.PYLONS])
@@ -108,9 +109,28 @@ class DubinsGateEnv(gym.Env):
                     self.violation_m2[k, i, j] = step * (violation.sum() - 0.5 * (violation[0] + violation[-1]))
                     self.oob_exits[k, i, j] = np.sum(inside[:-1] & ~inside[1:])
                     self.collision[k, i, j] = np.any(d <= pylon_r)
+                    self.regate[k, i, j] = (self.recrosses(pts[1:], self.course.GATES[k]) or
+                                            self.recrosses(pts[:-1], self.course.GATES[(k + 1) % n]))
 
         self.cost = self.length_m + self.PYLON_PENALTY * self.violation_m2 + self.OOB_PENALTY * self.oob_exits
-        self.cost[self.collision] = np.inf
+        self.cost[self.collision | self.regate] = np.inf
+
+    @staticmethod
+    def recrosses(pts, gate):
+        # True if the polyline crosses the gate segment (pts excludes the endpoint that sits on the gate, so
+        # the one legitimate crossing is not counted: a leg may go through its gates once, never back over them)
+        p1, p2 = gate["p1"], gate["p2"]
+        side = np.sign((p2[0] - p1[0]) * (pts[:, 1] - p1[1]) - (p2[1] - p1[1]) * (pts[:, 0] - p1[0]))
+        flip = np.nonzero(side[:-1] * side[1:] < 0)[0]
+        if len(flip) == 0:
+            return False
+        d = p2 - p1
+        a, b = pts[flip], pts[flip + 1]
+        sa = np.cross(d, a - p1)
+        sb = np.cross(d, b - p1)
+        x = a + (b - a) * (sa / (sa - sb))[:, None]  # where the sample segment meets the gate line
+        t = (x - p1) @ d / (d @ d)
+        return bool(np.any((t >= 0) & (t <= 1)))
 
     def leg_path(self, layer, i, j):
         return shortest_path(self.poses[layer % self.n_gates][i], self.poses[(layer + 1) % self.n_gates][j], self.TURN_RADIUS_M)

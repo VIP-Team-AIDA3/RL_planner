@@ -28,10 +28,10 @@ Geometry only: there is no aircraft model, and costs are in meters. `../preplann
 From the repo root (needs `numpy matplotlib pyyaml gymnasium pytest`; `/usr/local/bin/python3` has them):
 
 ```bash
-python dubins_preplanner/train.py --algo dp           # or q_learning | sarsa | all
-python dubins_preplanner/train.py --algo all --noise 0
-python dubins_preplanner/train.py --course ros2_ws/src/pylon_2026_world/purt_course.yaml
-python -m pytest dubins_preplanner -q                 # 6 tests, ~5 s
+/usr/local/bin/python3 dubins_preplanner/train.py --algo dp           # or q_learning | sarsa | all
+/usr/local/bin/python3 dubins_preplanner/train.py --algo all --noise 0
+/usr/local/bin/python3 dubins_preplanner/train.py --course ros2_ws/src/pylon_2026_world/purt_course.yaml
+/usr/local/bin/python3 -m pytest dubins_preplanner -q                 # 6 tests, ~5 s
 ```
 
 Outputs go to `dubins_preplanner/out/`: `<algo>_path.png`, `<algo>_nominal_path.yaml` and

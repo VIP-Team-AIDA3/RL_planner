@@ -57,7 +57,7 @@ def test_env_tables(env2):
     env, _ = env2
     assert env.cost.shape == (6, 50, 50) and tuple(env.observation_space.nvec) == (7, 50)
     assert env.collision.any() and np.all(np.isinf(env.cost[env.collision]))
-    assert np.all(np.isfinite(env.cost[~env.collision]))
+    assert env.regate.any() and np.all(np.isfinite(env.cost[~(env.collision | env.regate)]))
     env.NOISE = 0.2
     env.state = np.array([0, 7])
     assert sum(p for _, p, _, _ in env.get_possible_next_states(12)) == pytest.approx(1.0)
