@@ -28,7 +28,7 @@ class PureKinematicGrid(gym.Env):
         self.num_a_values = int(num_a_values)
         self.num_angle_values = int(num_angle_values)
 
-        self.reward_field_exponent = reward_field_exponent
+        self.reward_field_exponent = reward_field_exponent # Postponing this for now
 
         self.integration_dt = 0.01 # internal max integration substep -> the physics is eval every 0.01 seconds but the agent chooses an action every 0.1 seconds
         self.dt = float(dt) # Seconds per action, independent of spatial resolution.
@@ -38,7 +38,7 @@ class PureKinematicGrid(gym.Env):
         self.trajectory_line = None
         self.plot_path = []
         self.lambda_accel = lambda_accel
-        self.lambda_smooth = lambda_smooth
+        self.lambda_smooth = lambda_smooth # postpone this for now
 
         self.MAX_TIME = float(MAX_TIME)
         self.n_steps = 0
@@ -95,7 +95,7 @@ class PureKinematicGrid(gym.Env):
         self.observation_space = spaces.Box(
             low=lower_bounds, high=upper_bounds, shape=(7,), dtype=np.float32) # observation space with bounds specified above
 
-        # Accel magnitude bins, goes from 0 to a_max with 3 bins
+        # Accel magnitude bins, goes from 0 to a_max with 3 bins #TODO: make this a function of one of our current parameters
         reference_magnitudes = np.array([0.0, 1.5, 3.0, 4.92])
 
         accel_magnitudes = np.interp(
@@ -156,7 +156,7 @@ class PureKinematicGrid(gym.Env):
         """Wrap a course angle [-pi, pi)"""
         return (float(angle) + np.pi) % (2.0 * np.pi) - np.pi
 
-    def integrate_polar_action(self, action):
+    def integrate_polar_action(self, action): #TODO: need to verify geometrically that the math works out
         """Move a 2D point using polar acceleration and velocity."""
 
         # RL chooses acceleration magnitude and relative direction
@@ -227,6 +227,7 @@ class PureKinematicGrid(gym.Env):
             abs(np.rad2deg(self.wrap_angle(new_psi - psi))) / self.dt
         ), }
 
+    #TODO: Needs to calculate and return the rewards
     def step(self, action, ignore_truncation=False):
         # Store prev state
         start_state = self.state.copy()
@@ -264,50 +265,11 @@ class PureKinematicGrid(gym.Env):
             for xy in path
         )
 
-        # Check pylon distances along each trajectory substep
-        distances_by_segment = [
-            np.asarray(
-                self.race_env.pylon_distances(p0, p1),
-                dtype=float
-            )
-
-            for p0, p1 in zip(path[:-1], path[1:]) # changed this b/c the point can be curving toward a pylon
-        ]
-
-        # Closest approach to each pylon over the whole step
-        distances = np.min(
-            np.stack(distances_by_segment),
-            axis=0
-        )
-
-        nearest_pylon_m = float(np.min(distances))
-
-        pylon_robustness = self.race_env.pylon_robustness(
-            distances
-        )
-
-        hit_pylon = bool(np.any(
-            distances <= np.array(
-                [p["r"] for p in self.PYLONS]
-            )
-        ))
-
         # Speed constraints
         speed = float(self.state[2])
 
         stalled = speed < self.v_min
         overspeed = speed > self.v_max
-
-        # Calculate reward and gate progress
-        reward, reward_parts, event = self.calculate_reward(
-            accel_xy,
-            prev_xy,
-            new_xy,
-            pylon_robustness,
-            hit_pylon,
-            out_of_bounds,
-            path=path
-        )
 
         # Store previous commanded polar acceleration
         self.prev_accel = np.array(
@@ -318,10 +280,8 @@ class PureKinematicGrid(gym.Env):
         # Episode termination conditions
         terminated = bool(
             out_of_bounds
-            or hit_pylon
             or stalled
             or overspeed
-            or event["lap_finished"]
         )
 
         # Preserve the new time based episode tracking
@@ -344,19 +304,14 @@ class PureKinematicGrid(gym.Env):
             "prev_xy": prev_xy,
             "new_xy": new_xy,
             "out_of_bounds": out_of_bounds,
-            "hit_pylon": hit_pylon,
             "stalled": stalled,
             "overspeed": overspeed,
             "speed_m_s": speed,
             "course_deg": float(np.rad2deg(self.state[3])),
-            "nearest_pylon_m": nearest_pylon_m,
-            "pylon_robustness": pylon_robustness,
-            "reward_parts": reward_parts,
             **control_info,
-            **event,
         })
 
-        return self.get_observation(), reward, terminated, truncated, info
+        return self.get_observation(), 0.0, terminated, truncated, info
 
     def get_observation(self):
         noisy_state = self.noise(self.state)
