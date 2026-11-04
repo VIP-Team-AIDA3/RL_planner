@@ -85,40 +85,33 @@ class PureKinematicGrid(gym.Env):
             self.REWARDS.update(rewards)
         self.q = 0
 
-        # Observation space, [x, y, speed, psi, gate_progress (q), prev_a, prev_beta (direction of acceleration relative to velocity, angle in radians)]
+        # Observation space, [x, y, speed, psi, gate_progress (q)]
         lower_bounds = np.array(
-            [0.0, 0.0, self.v_min, -np.pi, 0.0, 0.0, -np.pi], 
+            [0.0, 0.0, self.v_min, -np.pi, 0.0], 
             dtype=np.float32)
         upper_bounds = np.array(
-            [self.grid_size - 1, self.grid_size - 1, self.v_max, np.pi, self.n_gates, self.a_max, np.pi], 
+            [self.grid_size - 1, self.grid_size - 1, self.v_max, np.pi, self.n_gates], 
             dtype=np.float32)
         self.observation_space = spaces.Box(
-            low=lower_bounds, high=upper_bounds, shape=(7,), dtype=np.float32) # observation space with bounds specified above
+            low=lower_bounds, high=upper_bounds, shape=(5,), dtype=np.float32) # observation space with bounds specified above
 
-        # Accel magnitude bins, goes from 0 to a_max with 3 bins #TODO: make this a function of one of our current parameters
-        reference_magnitudes = np.array([0.0, 1.5, 3.0, 4.92])
+        #tangential acceleration values and turning rate values for the action space
+        accel_values = np.array([
+            -4.92, -2.46, 0.0, 2.46, 4.92
+        ])
 
-        accel_magnitudes = np.interp(
-            np.linspace(0, 3, self.num_a_values),
-            np.arange(4),
-            reference_magnitudes,
-        ) * (self.a_max / 4.92)
+        turn_values = np.deg2rad([
+            -30, -20, -10, 0, 10, 20, 30
+        ])
 
-        # Accel direction bins
-        directions_deg = (
-            np.arange(self.num_angle_values) - self.num_angle_values // 2 # // is division and then floors the value
-        ) * (360.0 / self.num_angle_values)
+        #Creates every possible combination of acceleration and turning rate
+        self.action_to_control = {
+            i * len(turn_values) + j: (float(a), float(w))
+            for i, a in enumerate(accel_values)
+            for j, w in enumerate(turn_values)
+        }
 
-        # Create all polar actions
-        self.action_to_polar = {0: (0.0, 0.0)} # initializing variable
-
-        for magnitude in accel_magnitudes[1:]:
-            for direction in directions_deg:
-                idx = len(self.action_to_polar) # idx starts as 1, basically the idx is the action selection
-
-                self.action_to_polar[idx] = (float(magnitude), float(np.deg2rad(direction)))
-
-        self.action_space = spaces.Discrete(len(self.action_to_polar))
+        self.action_space = spaces.Discrete(len(self.action_to_control))
 
         self.prev_accel = np.zeros(2, dtype=np.float32)
         
@@ -149,39 +142,20 @@ class PureKinematicGrid(gym.Env):
         self.plot_path = []
         self._last_step_path = [self.state[:2].copy()]
 
-        return self.get_observation(), self.get_info
+        return self.get_observation(), self.get_info()
 
     @staticmethod
     def wrap_angle(angle): # wraps all angles into the [-pi, pi) range, eg. 2pi -> 0
         """Wrap a course angle [-pi, pi)"""
         return (float(angle) + np.pi) % (2.0 * np.pi) - np.pi
 
-    def integrate_polar_action(self, action): #TODO: need to verify geometrically that the math works out
+    def integrate_control_action(self, action): #TODO: need to verify geometrically that the math works out
         """Move a 2D point using polar acceleration and velocity."""
 
-        # RL chooses acceleration magnitude and relative direction
-        a_mag, beta = self.action_to_polar[int(action)]
-        x, y, speed, psi = map(float, self.state)
-
-        a_forward = a_mag * np.cos(beta) # changes speed in direction of travel
-        a_side = a_mag * np.sin(beta) # changes the direction of velocity
-
-        # Limit heading change over one RL action interval
-        max_delta_psi = self.max_turn_rate_rad_s * self.dt
-
-        final_forward_speed = speed + a_forward * self.dt
-        max_side = (final_forward_speed * np.tan(max_delta_psi) / self.dt)
-
-        a_side = np.clip(a_side, -max_side, max_side)
-
-        # Converting acceleration to cartesian
-        ax = a_forward * np.cos(psi) - a_side * np.sin(psi)
-        ay = a_forward * np.sin(psi) + a_side * np.cos(psi)
-
-        # Converting polar vel to cartesian
-        vx = speed * np.cos(psi)
-        vy = speed * np.sin(psi)
-
+        # RL chooses tangential acceleration and turning rate
+        a, omega = self.action_to_control[int(action)]
+        x, y, v, psi = map(float, self.state)
+        
         # Physics integration substeps
     
         # Multi rate simulation: the RL agent selects a new action every
@@ -202,30 +176,25 @@ class PureKinematicGrid(gym.Env):
         path = [np.array([x, y])]
 
         for _ in range(n_substeps):
-            # Constant acceleration kinematics
-            x += vx * sub_dt + 0.5 * ax * sub_dt**2
-            y += vy * sub_dt + 0.5 * ay * sub_dt**2
+            #Midpoint values between each substep
+            v_mid = v + 0.5 * a * sub_dt
+            psi_mid = psi + 0.5 * omega * sub_dt
 
-            # New velocities, not used for the current position update
-            vx += ax * sub_dt
-            vy += ay * sub_dt
+            #Update Position Values
+            x += v_mid * np.cos(psi_mid) * sub_dt
+            y += v_mid * np.sin(psi_mid) * sub_dt
+
+            #update speed and heading
+            v += a * sub_dt
+            psi = self.wrap_angle(psi + omega * sub_dt)
 
             path.append(np.array([x, y]))
 
-        # Converting updated vel back to polar
-        new_speed = np.hypot(vx, vy)
-        new_psi = np.arctan2(vy, vx) if new_speed > 1e-9 else psi
-
-        self.state = np.array([x, y, new_speed, self.wrap_angle(new_psi)], dtype=np.float32)
+        self.state = np.array([x, y, v, psi], dtype=np.float32)
 
         return path, {
-        "requested_a_m_s2": float(a_mag),
-        "requested_beta_deg": float(np.rad2deg(beta)),
-        "applied_forward_a_m_s2": float(a_forward),
-        "max_applied_lateral_a_m_s2": float(abs(a_side)),
-        "achieved_avg_turn_rate_deg_s": float(
-            abs(np.rad2deg(self.wrap_angle(new_psi - psi))) / self.dt
-        ), }
+        "applied_a_m_s2": float(a),
+        "applied_omega_deg_s": float(np.rad2deg(omega)), }
 
     #TODO: Needs to calculate and return the rewards
     def step(self, action, ignore_truncation=False):
@@ -233,15 +202,15 @@ class PureKinematicGrid(gym.Env):
         start_state = self.state.copy()
         prev_xy = start_state[:2].copy()
 
-        # Update pos and vel using polar kinematics
-        path, control_info = self.integrate_polar_action(action)
+        # Update pos and vel
+        path, control_info = self.integrate_control_action(action)
 
         # Save calculated trajectory for plotting
         self._last_step_path = path
         new_xy = self.state[:2].copy()
 
-        # Get the commanded polar accel
-        a_mag, beta = self.action_to_polar[int(action)]
+        # Get the commanded accel
+        a, omega = self.action_to_control[int(action)]
 
         # Converting init vel to cartesian
         prev_velocity_xy = start_state[2] * np.array([
@@ -271,9 +240,9 @@ class PureKinematicGrid(gym.Env):
         stalled = speed < self.v_min
         overspeed = speed > self.v_max
 
-        # Store previous commanded polar acceleration
+        # Store previous commanded acceleration
         self.prev_accel = np.array(
-            [a_mag, beta],
+            [a, omega],
             dtype=np.float32
         )
 
@@ -316,14 +285,14 @@ class PureKinematicGrid(gym.Env):
     def get_observation(self):
         noisy_state = self.noise(self.state)
         physical_observation = self.discretize_state(noisy_state)
-        return np.concatenate((physical_observation,np.array([self.q], dtype=np.float32),self.prev_accel,))
+        return np.concatenate((physical_observation,np.array([self.q], dtype=np.float32)))
 
     def get_info(self):
         return {"state_history": self.state_history, "action_history": self.action_history,
                 "q": self.q, "elapsed_time": self.elapsed_time}
 
     def plot_step(self, start_state, action):
-        """Animate the trajectory calculated by integrate_polar_action()."""
+        """Animate the trajectory calculated by integrate_control_action()."""
 
         if self.ax is None or self.agent_circle is None:
             raise RuntimeError(
@@ -628,49 +597,137 @@ class PureKinematicGrid(gym.Env):
             self.ax = None
 
 if __name__ == "__main__":
-    env = PureKinematicGrid(
-        num_a_values=4,
-        num_angle_values=12
-    )
+    env = PureKinematicGrid()
 
-    observation, info = env.reset(
-        speed=4.83,
-        psi_deg=0
-    )
+    def control_action(acceleration, turn_deg_s):
+        """Select a deterministic command instead of sampling a random action."""
+        return next(
+            i for i, (a, omega) in env.action_to_control.items()
+            if np.isclose(a, acceleration)
+            and np.isclose(omega, np.deg2rad(turn_deg_s))
+        )
 
-    # TEST 1: Verify basic polar kinematics and action space setup.
-    # Confirm the environment initializes correctly with 37 actions (hand calc gives 37 as the verifiable number).
-    # Apply an acceleration defined by magnitude and relative angle, then verify that the position, speed, and course angle update correctly
-    # (comparing to hand calculations, the values given by the code are correct).
-    # Also looking at the resulting average turn rate. PASSES THIS CHECK
-    print("Initial state:", env.state)
-    print("Number of actions:", env.action_space.n)
+    def check_close(actual, expected, atol=3e-6):
+        # Physical state is float32; allow rounding and midpoint integration error.
+        np.testing.assert_allclose(actual, expected, rtol=0.0, atol=atol)
 
-    action = env.action_space.sample()
+    # TEST 1: Verify all 35 acceleration/heading-rate combinations and reset API.
+    expected_controls = {
+        (a, w)
+        for a in (-4.92, -2.46, 0.0, 2.46, 4.92)
+        for w in (-30, -20, -10, 0, 10, 20, 30)
+    }
+    actual_controls = {
+        (round(a, 2), round(float(np.rad2deg(w))))
+        for a, w in env.action_to_control.values()
+    }
+    assert env.action_space.n == 35
+    assert set(env.action_to_control) == set(range(35))
+    assert actual_controls == expected_controls
+    observation, info = env.reset(seed=42)
+    assert isinstance(info, dict), "reset() must return an info dictionary"
+    assert observation.shape == (5,)
+    assert observation.dtype == np.float32
+    assert env.observation_space.contains(observation)
+    print("TEST 1 PASSED: 35 controls, five-value observation, reset API")
 
-    observation, reward, terminated, truncated, info = env.step(action)
+    # TEST 2: Straight acceleration/braking at multiple headings.
+    # Exact solution: displacement = (v0*t + 0.5*a*t**2) along the heading.
+    for a in (-4.92, -2.46, 0.0, 2.46, 4.92):
+        for heading_deg in (0, 90, -135):
+            env.reset(seed=42, speed=4.83, psi_deg=heading_deg)
+            start = env.state.astype(float).copy()
+            _, _, terminated, truncated, info = env.step(control_action(a, 0))
+            distance = start[2] * env.dt + 0.5 * a * env.dt**2
+            expected_xy = start[:2] + distance * np.array([
+                np.cos(start[3]), np.sin(start[3])
+            ])
+            check_close(env.state[:2], expected_xy)
+            check_close(env.state[2], start[2] + a * env.dt)
+            check_close(env.wrap_angle(env.state[3] - start[3]), 0.0)
+            assert not terminated and not truncated
+            check_close(info["applied_a_m_s2"], a)
+    print("TEST 2 PASSED: exact straight-line position and speed for acceleration/braking")
 
-    print("New state:", env.state)
-    print("Requested acceleration:", info["requested_a_m_s2"])
-    print("Acceleration angle:", info["requested_beta_deg"])
-    print("Achieved average turn rate:", info["achieved_avg_turn_rate_deg_s"])
+    # TEST 3: Constant-speed left/right circles, checked against the exact arc.
+    # Radius = v/abs(omega). Check every intermediate position, not just the endpoint.
+    for turn_deg_s in (-30, 30):
+        env.reset(seed=42, speed=4.83, psi_deg=25)
+        start = env.state.astype(float).copy()
+        omega = np.deg2rad(turn_deg_s)
+        env.step(control_action(0.0, turn_deg_s))
+        path = np.asarray(env._last_step_path)
+        times = np.linspace(0.0, env.dt, len(path))
+        headings = start[3] + omega * times
+        expected_path = start[:2] + np.column_stack((
+            start[2] / omega * (np.sin(headings) - np.sin(start[3])),
+            start[2] / omega * (np.cos(start[3]) - np.cos(headings)),
+        ))
+        check_close(path, expected_path, atol=2e-6)
+        check_close(env.state[2], start[2])
+        assert len(path) >= 11
+        print(f"TEST 3 PASSED: {turn_deg_s:+d} deg/s circle, radius {start[2]/abs(omega):.4f} m")
 
+    # TEST 4: All nominal controls respect the signed heading-rate constraint.
+    # Derive the achieved rate from the physical state, independently of info.
+    for action, (a, omega) in env.action_to_control.items():
+        env.reset(seed=42, speed=4.83, psi_deg=0)
+        start_heading = float(env.state[3])
+        _, _, terminated, truncated, info = env.step(action)
+        delta = env.wrap_angle(float(env.state[3]) - start_heading)
+        check_close(delta, omega * env.dt)
+        assert abs(delta) <= env.max_turn_rate_rad_s * env.dt + 1e-7
+        check_close(info["applied_omega_deg_s"], np.rad2deg(omega))
+        assert not terminated and not truncated
+    print("TEST 4 PASSED: all 35 controls respect +/-3 degrees per 0.1-second step")
 
-    # TEST 2: Verify the maximum turn-rate constraint.
-    # Apply maximum acceleration (4.92 m/s^2) at 90 degrees
-    # relative to the velocity, requesting a sharp left turn.
-    # Confirm that the resulting course change does not exceed
-    # 3 degrees over one 0.1-second RL control interval,
-    # corresponding to the imposed 30 deg/s average turn-rate limit. PASSES THIS CHECK.
-    env.reset(speed=4.83, psi_deg=0)
+    # TEST 5: Turning across +/-180 degrees wraps without reversing the turn.
+    for heading_deg, turn_deg_s in ((179, 30), (-179, -30)):
+        env.reset(seed=42, psi_deg=heading_deg)
+        start_heading = float(env.state[3])
+        env.step(control_action(0.0, turn_deg_s))
+        assert -np.pi <= float(env.state[3]) < np.pi
+        check_close(
+            env.wrap_angle(float(env.state[3]) - start_heading),
+            np.deg2rad(turn_deg_s) * env.dt,
+        )
+    print("TEST 5 PASSED: heading wrap for left and right turns")
 
-    action = next(
-        i for i, (a, beta) in env.action_to_polar.items()
-        if np.isclose(a, 4.92)
-        and np.isclose(beta, np.pi / 2)
-    )
+    # TEST 6: Speed violations terminate without clamping the physical speed.
+    for initial_speed, a, flag in (
+        (env.v_max - 0.01, 4.92, "overspeed"),
+        (env.v_min + 0.01, -4.92, "stalled"),
+    ):
+        env.reset(seed=42, speed=initial_speed)
+        start_speed = float(env.state[2])
+        _, _, terminated, truncated, info = env.step(control_action(a, 0))
+        check_close(env.state[2], start_speed + a * env.dt)
+        assert terminated and not truncated and info[flag]
+        assert not info["out_of_bounds"]
+    print("TEST 6 PASSED: overspeed and stall termination, physical speed remains unclamped")
 
-    obs, reward, terminated, truncated, info = env.step(action)
+    # TEST 7: Leaving the course terminates and preserves the intermediate path.
+    env.reset(seed=42, x=env.grid_size - 1 - 0.01, y=19, psi_deg=0)
+    _, _, terminated, truncated, info = env.step(control_action(0.0, 0))
+    assert terminated and not truncated and info["out_of_bounds"]
+    assert any(xy[0] > env.grid_size - 1 for xy in env._last_step_path)
+    print("TEST 7 PASSED: out-of-bounds termination")
 
-    print("New state:", env.state)
-    print("Average turn rate:", info["achieved_avg_turn_rate_deg_s"])
+    # TEST 8: Time-limit truncation and reset of episode bookkeeping.
+    original_max_time = env.MAX_TIME
+    env.MAX_TIME = 2 * env.dt
+    env.reset(seed=42)
+    _, _, terminated, truncated, _ = env.step(control_action(0.0, 0))
+    assert not terminated and not truncated
+    _, _, terminated, truncated, _ = env.step(control_action(0.0, 0))
+    assert not terminated and truncated
+    check_close(env.elapsed_time, 2 * env.dt)
+    assert len(env.state_history) == 3 and len(env.action_history) == 2
+    observation, info = env.reset(seed=42)
+    assert env.n_steps == 0 and env.elapsed_time == 0.0 and env.q == 0
+    assert len(env.state_history) == 1 and env.action_history == []
+    env.MAX_TIME = original_max_time
+    print("TEST 8 PASSED: time-limit truncation and history reset")
+
+    env.close()
+    print("All 8 kinematics checks passed. Race rewards and gate progression are not tested here.")
