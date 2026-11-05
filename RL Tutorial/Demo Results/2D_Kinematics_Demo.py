@@ -13,18 +13,27 @@ from pathlib import Path
 
 class PureKinematicGrid(gym.Env):
     def __init__(self, grid_size=38, v_max=8.0, a_max=4.92, grid_density=20, lambda_accel=0.0001,
-    lambda_smooth=0.0003, MAX_TIME=200.0, course_path= None, rewards=None, dt=0.1,
-    reward_field_exponent=0.5, num_a_values=4, num_angle_values=12):
+    MAX_TIME=200.0, course_path= None, rewards=None, dt=0.1,
+    reward_field_exponent=0.5, num_a_values=5, num_angle_values=7,
+    max_turn_rate_deg_s=30.0):
         super().__init__()
+        if (isinstance(num_angle_values, (bool, np.bool_))
+                or not isinstance(num_angle_values, (int, np.integer))
+                or num_angle_values < 3 or num_angle_values % 2 == 0):
+            raise ValueError(
+                "num_angle_values must be an odd integer >= 3 "
+                "(e.g., 3, 5, or 7) so the turn-rate bins include zero; "
+                f"got {num_angle_values!r}."
+            )
         self.grid_size = grid_size
         self.grid_density = grid_density # how many sub lines appear between whole integer values
 
         self.v_max = v_max
         self.v_min = 3.39  # m/s: underspeed penalty applies at or below this speed. Stall Speed
         self.v_cruise = 4.83 # airborne starting speed m/s
-        self.max_turn_rate_rad_s = np.deg2rad(30.0)
+        self.max_turn_rate_rad_s = np.deg2rad(max_turn_rate_deg_s)
 
-        self.a_max = a_max
+        self.a_max = float(a_max)
         self.num_a_values = int(num_a_values)
         self.num_angle_values = int(num_angle_values)
 
@@ -38,7 +47,6 @@ class PureKinematicGrid(gym.Env):
         self.trajectory_line = None
         self.plot_path = []
         self.lambda_accel = lambda_accel
-        self.lambda_smooth = lambda_smooth # postpone this for now
 
         self.MAX_TIME = float(MAX_TIME)
         self.n_steps = 0
@@ -95,25 +103,22 @@ class PureKinematicGrid(gym.Env):
         self.observation_space = spaces.Box(
             low=lower_bounds, high=upper_bounds, shape=(5,), dtype=np.float32) # observation space with bounds specified above
 
-        #tangential acceleration values and turning rate values for the action space
-        accel_values = np.array([
-            -4.92, -2.46, 0.0, 2.46, 4.92
-        ])
+        # Bin counts are exact; turn_values contains heading rates in rad/s.
+        self.accel_values = np.linspace(0, self.a_max, self.num_a_values)
+        self.turn_values = np.linspace(
+            -self.max_turn_rate_rad_s, self.max_turn_rate_rad_s,
+            self.num_angle_values,
+        )
 
-        turn_values = np.deg2rad([
-            -30, -20, -10, 0, 10, 20, 30
-        ])
-
-        #Creates every possible combination of acceleration and turning rate
+        #Creates dictionary with each combination of accel and turn rate
         self.action_to_control = {
-            i * len(turn_values) + j: (float(a), float(w))
-            for i, a in enumerate(accel_values)
-            for j, w in enumerate(turn_values)
+            i * self.num_angle_values + j: (float(a), float(w))
+            for i, a in enumerate(self.accel_values)
+            for j, w in enumerate(self.turn_values)
         }
 
         self.action_space = spaces.Discrete(len(self.action_to_control))
 
-        self.prev_accel = np.zeros(2, dtype=np.float32)
         
         self.fig = None
         self.ax = None
@@ -134,7 +139,6 @@ class PureKinematicGrid(gym.Env):
                                initial_speed, 
                                self.wrap_angle(initial_angle)], dtype=np.float32)
 
-        self.prev_accel = np.zeros(2, dtype=np.float32)
         self.n_steps = 0
         self.elapsed_time = 0.0
         self.state_history = [self.state.copy()]
@@ -239,12 +243,6 @@ class PureKinematicGrid(gym.Env):
 
         stalled = speed < self.v_min
         overspeed = speed > self.v_max
-
-        # Store previous commanded acceleration
-        self.prev_accel = np.array(
-            [a, omega],
-            dtype=np.float32
-        )
 
         # Episode termination conditions
         terminated = bool(
@@ -412,13 +410,9 @@ class PureKinematicGrid(gym.Env):
                        hit_pylon, out_of_bounds, path=None):
         """Combine kinematic penalties and race rewards, advancing gate progress."""
         # add reward for accelerating too much as a penalty as it requires more energy for the drone 
-        # add reward for continousness of acceleration rather than abrupt discrete changes in acceleration
-        # as it is unrealistic to accelerate with a_max forward and suddenly go backward with -a_max 
-        # Temporarily disable acceleration and smoothness penalties during reward tuning.
+        # Temporarily disable the acceleration penalty during reward tuning.
         # accel_penalty = np.sum(accel ** 2)
 
-        # delta_accel = accel - self.prev_accel
-        # smoothness_penalty = np.sum(delta_accel ** 2)
         # Physical speed: reward is evaluated before observation discretization.
         speed = float(self.state[2])
         field_reward = float(self.REWARDS["reward_field"]
@@ -427,7 +421,6 @@ class PureKinematicGrid(gym.Env):
         parts = {
             "neutral": float(self.REWARDS["neutral"]),
             # "acceleration": float(-self.lambda_accel * accel_penalty),
-            # "smoothness": float(-self.lambda_smooth * smoothness_penalty),
             "pylon_field": float(self.REWARDS["pylon_field"] * max(0.0, -pylon_robustness)),
             "progress": 0.0,
             "midpoint": 0.0,
@@ -597,137 +590,220 @@ class PureKinematicGrid(gym.Env):
             self.ax = None
 
 if __name__ == "__main__":
-    env = PureKinematicGrid()
+    import unittest
 
-    def control_action(acceleration, turn_deg_s):
-        """Select a deterministic command instead of sampling a random action."""
-        return next(
-            i for i, (a, omega) in env.action_to_control.items()
-            if np.isclose(a, acceleration)
-            and np.isclose(omega, np.deg2rad(turn_deg_s))
-        )
+    class KinematicsTests(unittest.TestCase):
+        """Run this file to check the current nonnegative-acceleration model."""
 
-    def check_close(actual, expected, atol=3e-6):
-        # Physical state is float32; allow rounding and midpoint integration error.
-        np.testing.assert_allclose(actual, expected, rtol=0.0, atol=atol)
+        def setUp(self):
+            self.env = PureKinematicGrid()
+            self.addCleanup(self.env.close)
+            self.env.reset(seed=42)
 
-    # TEST 1: Verify all 35 acceleration/heading-rate combinations and reset API.
-    expected_controls = {
-        (a, w)
-        for a in (-4.92, -2.46, 0.0, 2.46, 4.92)
-        for w in (-30, -20, -10, 0, 10, 20, 30)
-    }
-    actual_controls = {
-        (round(a, 2), round(float(np.rad2deg(w))))
-        for a, w in env.action_to_control.values()
-    }
-    assert env.action_space.n == 35
-    assert set(env.action_to_control) == set(range(35))
-    assert actual_controls == expected_controls
-    observation, info = env.reset(seed=42)
-    assert isinstance(info, dict), "reset() must return an info dictionary"
-    assert observation.shape == (5,)
-    assert observation.dtype == np.float32
-    assert env.observation_space.contains(observation)
-    print("TEST 1 PASSED: 35 controls, five-value observation, reset API")
+        def action(self, a, turn_deg_s):
+            matches = [
+                i for i, (accel, omega) in self.env.action_to_control.items()
+                if np.isclose(accel, a)
+                and np.isclose(omega, np.deg2rad(turn_deg_s))
+            ]
+            self.assertEqual(len(matches), 1, "Expected exactly one matching control")
+            return matches[0]
 
-    # TEST 2: Straight acceleration/braking at multiple headings.
-    # Exact solution: displacement = (v0*t + 0.5*a*t**2) along the heading.
-    for a in (-4.92, -2.46, 0.0, 2.46, 4.92):
-        for heading_deg in (0, 90, -135):
-            env.reset(seed=42, speed=4.83, psi_deg=heading_deg)
+        def close(self, actual, expected, atol=3e-6):
+            np.testing.assert_allclose(actual, expected, rtol=0, atol=atol)
+
+        # TEST 1: Exact bin counts, endpoints, spacing, and unique action IDs.
+        def test_01_default_bins(self):
+            env = self.env
+            self.close(env.accel_values, [0, 1.23, 2.46, 3.69, 4.92])
+            self.close(np.rad2deg(env.turn_values), [-30, -20, -10, 0, 10, 20, 30])
+            self.assertEqual(env.action_space.n, 35)
+            self.assertEqual(set(env.action_to_control), set(range(35)))
+            controls = list(env.action_to_control.values())
+            self.assertEqual(len(set(controls)), 35)
+            self.assertEqual(controls.count((0.0, 0.0)), 1)
+
+        # TEST 2: Reject even counts with a clear message before initialization.
+        def test_02_even_turn_bins(self):
+            for count in (2, 4, 6, 8):
+                with self.subTest(count=count):
+                    with self.assertRaisesRegex(ValueError, "num_angle_values must be an odd integer"):
+                        PureKinematicGrid(num_angle_values=count)
+
+        # TEST 3: Returned observations must match their declared Box.
+        def test_03_observation_contract(self):
+            observation, info = self.env.reset(seed=42)
+            self.assertIsInstance(info, dict)
+            self.assertEqual(observation.shape, self.env.observation_space.shape)
+            self.assertEqual(observation.dtype, np.float32)
+            self.assertTrue(self.env.observation_space.contains(observation))
+            observation, _, _, _, _ = self.env.step(self.action(2.46, 0))
+            self.assertTrue(self.env.observation_space.contains(observation))
+
+        # TEST 4: Exact straight-line motion for every acceleration bin.
+        def test_04_straight_motion(self):
+            for a in self.env.accel_values:
+                for heading in (0, 90, -135):
+                    with self.subTest(acceleration=a, heading=heading):
+                        self.env.reset(seed=42, psi_deg=heading)
+                        start = self.env.state.astype(float).copy()
+                        _, _, done, truncated, _ = self.env.step(self.action(a, 0))
+                        distance = start[2] * self.env.dt + 0.5 * a * self.env.dt**2
+                        expected = start[:2] + distance * np.array([np.cos(start[3]), np.sin(start[3])])
+                        self.close(self.env.state[:2], expected)
+                        self.close(self.env.state[2], start[2] + a * self.env.dt)
+                        self.close(self.env.state[3], start[3])
+                        self.assertFalse(done or truncated)
+
+        # TEST 5: Every intermediate point follows the exact constant-speed arc.
+        def test_05_circular_motion(self):
+            for turn in (-30, 30):
+                with self.subTest(turn=turn):
+                    self.env.reset(seed=42, psi_deg=25)
+                    start = self.env.state.astype(float).copy()
+                    self.env.step(self.action(0, turn))
+                    path = np.asarray(self.env._last_step_path)
+                    self.assertGreaterEqual(len(path), 11)
+                    omega = np.deg2rad(turn)
+                    times = np.linspace(0, self.env.dt, len(path))
+                    headings = start[3] + omega * times
+                    expected = start[:2] + np.column_stack((
+                        start[2] / omega * (np.sin(headings) - np.sin(start[3])),
+                        start[2] / omega * (np.cos(start[3]) - np.cos(headings)),
+                    ))
+                    self.close(path, expected, atol=2e-6)
+                    self.close(self.env.state[2], start[2])
+
+        # TEST 6: All controls produce the commanded signed heading change.
+        def test_06_turn_rate_and_wrap(self):
+            for action, (a, omega) in self.env.action_to_control.items():
+                with self.subTest(action=action):
+                    self.env.reset(seed=42, psi_deg=179 if omega >= 0 else -179)
+                    initial_heading = float(self.env.state[3])
+                    _, _, _, _, info = self.env.step(action)
+                    delta = self.env.wrap_angle(float(self.env.state[3]) - initial_heading)
+                    self.close(delta, omega * self.env.dt)
+                    self.assertLessEqual(abs(delta), self.env.max_turn_rate_rad_s * self.env.dt + 1e-7)
+                    self.assertTrue(-np.pi <= float(self.env.state[3]) < np.pi)
+                    self.close(info["applied_omega_deg_s"], np.rad2deg(omega))
+
+        # TEST 7: Overspeed must terminate without clamping physical speed.
+        def test_07_overspeed(self):
+            self.env.reset(seed=42, speed=7.99)
+            speed = float(self.env.state[2])
+            _, _, done, truncated, info = self.env.step(self.action(self.env.a_max, 0))
+            self.close(self.env.state[2], speed + self.env.a_max * self.env.dt)
+            self.assertTrue(done and info["overspeed"])
+            self.assertFalse(truncated or info["stalled"])
+            # Nonnegative controls cannot produce a stall from a valid reset speed.
+            for speed in (self.env.v_min - 0.1, self.env.v_max + 0.1):
+                with self.assertRaises(ValueError):
+                    self.env.reset(speed=speed)
+
+        # TEST 8: Crossing each of the four boundaries terminates.
+        def test_08_boundaries(self):
+            edge = self.env.grid_size - 1
+            for x, y, heading in ((0.01, 19, 180), (edge - 0.01, 19, 0),
+                                  (19, 0.01, -90), (19, edge - 0.01, 90)):
+                with self.subTest(heading=heading):
+                    self.env.reset(seed=42, x=x, y=y, psi_deg=heading)
+                    _, _, done, truncated, info = self.env.step(self.action(0, 0))
+                    self.assertTrue(done and info["out_of_bounds"])
+                    self.assertFalse(truncated)
+                    self.assertTrue(any(np.any(p < 0) or np.any(p > edge)
+                                        for p in self.env._last_step_path))
+
+        # TEST 9: Time limit, ignore_truncation, histories, and reset bookkeeping.
+        def test_09_time_and_reset(self):
+            env = self.env
+            env.MAX_TIME = 2 * env.dt
+            action = self.action(0, 0)
+            self.assertFalse(env.step(action)[3])
+            self.assertTrue(env.step(action)[3])
+            self.assertFalse(env.step(action, ignore_truncation=True)[3])
+            self.close(env.elapsed_time, 3 * env.dt)
+            self.assertEqual(len(env.state_history), 4)
+            self.assertEqual(len(env.action_history), 3)
+            env.reset(seed=42)
+            self.assertEqual((env.n_steps, env.elapsed_time, env.q), (0, 0.0, 0))
+            self.assertEqual(len(env.state_history), 1)
+            self.assertEqual(env.action_history, [])
+
+        # TEST 10: Seeded observations repeat; noise never changes physical state.
+        def test_10_noise_and_discretization(self):
+            first, _ = self.env.reset(seed=123)
+            second, _ = self.env.reset(seed=123)
+            np.testing.assert_array_equal(first, second)
+            state = self.env.state.copy()
+            self.env.get_observation()
+            np.testing.assert_array_equal(self.env.state, state)
+            raw = np.array([10.023, 11.077, 4.83, np.deg2rad(16)])
+            original = raw.copy()
+            result = self.env.discretize_state(raw)
+            self.close(result, [10.0, 11.1, 4.75, np.deg2rad(20)])
+            np.testing.assert_array_equal(raw, original)
+
+        # TEST 11: Custom bin counts and limits generate the complete action grid.
+        def test_11_custom_bins(self):
+            for na, nt in ((3, 3), (4, 5), (7, 9)):
+                with self.subTest(accel_bins=na, turn_bins=nt):
+                    env = PureKinematicGrid(num_a_values=na, num_angle_values=nt,
+                                            a_max=3.0, max_turn_rate_deg_s=20.0)
+                    self.addCleanup(env.close)
+                    self.assertEqual(env.action_space.n, na * nt)
+                    self.close(env.accel_values[[0, -1]], [0.0, 3.0])
+                    self.close(np.diff(env.accel_values), 3.0 / (na - 1))
+                    self.close(np.rad2deg(env.turn_values[[0, -1]]), [-20.0, 20.0])
+                    self.close(np.diff(np.rad2deg(env.turn_values)), 40.0 / (nt - 1))
+                    expected = {(float(a), float(w))
+                                for a in env.accel_values for w in env.turn_values}
+                    self.assertEqual(set(env.action_to_control.values()), expected)
+                    self.assertEqual(list(env.action_to_control.values()).count((0.0, 0.0)), 1)
+
+        # TEST 12: Acceleration while turning, using independent high-order quadrature
+        # of (v0 + a*t)*[cos(psi0 + omega*t), sin(psi0 + omega*t)].
+        def test_12_accelerating_turn(self):
+            nodes, weights = np.polynomial.legendre.leggauss(32)
+            for turn in (-30, 30):
+                with self.subTest(turn=turn):
+                    self.env.reset(seed=42, psi_deg=40)
+                    start = self.env.state.astype(float).copy()
+                    a = self.env.a_max
+                    omega = np.deg2rad(turn)
+                    self.env.step(self.action(a, turn))
+                    path = np.asarray(self.env._last_step_path)
+                    for index, time in enumerate(np.linspace(0, self.env.dt, len(path))):
+                        times = (nodes + 1) * time / 2
+                        speeds = start[2] + a * times
+                        headings = start[3] + omega * times
+                        dx = time / 2 * np.dot(weights, speeds * np.cos(headings))
+                        dy = time / 2 * np.dot(weights, speeds * np.sin(headings))
+                        self.close(path[index], start[:2] + [dx, dy], atol=5e-6)
+                    self.close(self.env.state[2], start[2] + a * self.env.dt)
+
+        # TEST 13: A control interval need not be a multiple of integration_dt.
+        def test_13_nonstandard_dt(self):
+            env = PureKinematicGrid(dt=0.135)
+            self.addCleanup(env.close)
+            env.reset(seed=42)
             start = env.state.astype(float).copy()
-            _, _, terminated, truncated, info = env.step(control_action(a, 0))
-            distance = start[2] * env.dt + 0.5 * a * env.dt**2
-            expected_xy = start[:2] + distance * np.array([
-                np.cos(start[3]), np.sin(start[3])
-            ])
-            check_close(env.state[:2], expected_xy)
-            check_close(env.state[2], start[2] + a * env.dt)
-            check_close(env.wrap_angle(env.state[3] - start[3]), 0.0)
-            assert not terminated and not truncated
-            check_close(info["applied_a_m_s2"], a)
-    print("TEST 2 PASSED: exact straight-line position and speed for acceleration/braking")
+            action = next(i for i, (a, w) in env.action_to_control.items()
+                          if a == 0.0 and w == 0.0)
+            env.step(action)
+            self.close(env.state[:2], start[:2] + [start[2] * env.dt, 0])
+            self.close(env.elapsed_time, env.dt)
+            self.assertGreaterEqual(len(env._last_step_path) - 1,
+                                    int(np.ceil(env.dt / env.integration_dt)))
+            self.close(env._last_step_path[0], start[:2])
+            self.close(env._last_step_path[-1], env.state[:2])
 
-    # TEST 3: Constant-speed left/right circles, checked against the exact arc.
-    # Radius = v/abs(omega). Check every intermediate position, not just the endpoint.
-    for turn_deg_s in (-30, 30):
-        env.reset(seed=42, speed=4.83, psi_deg=25)
-        start = env.state.astype(float).copy()
-        omega = np.deg2rad(turn_deg_s)
-        env.step(control_action(0.0, turn_deg_s))
-        path = np.asarray(env._last_step_path)
-        times = np.linspace(0.0, env.dt, len(path))
-        headings = start[3] + omega * times
-        expected_path = start[:2] + np.column_stack((
-            start[2] / omega * (np.sin(headings) - np.sin(start[3])),
-            start[2] / omega * (np.cos(start[3]) - np.cos(headings)),
-        ))
-        check_close(path, expected_path, atol=2e-6)
-        check_close(env.state[2], start[2])
-        assert len(path) >= 11
-        print(f"TEST 3 PASSED: {turn_deg_s:+d} deg/s circle, radius {start[2]/abs(omega):.4f} m")
+        # TEST 14: Observations contain only physical state and gate progress.
+        def test_14_minimal_observation(self):
+            observation, _ = self.env.reset(seed=42)
+            self.assertEqual(observation.shape, (5,))
+            observation, _, _, _, _ = self.env.step(self.action(2.46, -30))
+            self.assertEqual(observation.shape, (5,))
+            self.assertTrue(self.env.observation_space.contains(observation))
+            self.assertEqual(observation[4], self.env.q)
 
-    # TEST 4: All nominal controls respect the signed heading-rate constraint.
-    # Derive the achieved rate from the physical state, independently of info.
-    for action, (a, omega) in env.action_to_control.items():
-        env.reset(seed=42, speed=4.83, psi_deg=0)
-        start_heading = float(env.state[3])
-        _, _, terminated, truncated, info = env.step(action)
-        delta = env.wrap_angle(float(env.state[3]) - start_heading)
-        check_close(delta, omega * env.dt)
-        assert abs(delta) <= env.max_turn_rate_rad_s * env.dt + 1e-7
-        check_close(info["applied_omega_deg_s"], np.rad2deg(omega))
-        assert not terminated and not truncated
-    print("TEST 4 PASSED: all 35 controls respect +/-3 degrees per 0.1-second step")
-
-    # TEST 5: Turning across +/-180 degrees wraps without reversing the turn.
-    for heading_deg, turn_deg_s in ((179, 30), (-179, -30)):
-        env.reset(seed=42, psi_deg=heading_deg)
-        start_heading = float(env.state[3])
-        env.step(control_action(0.0, turn_deg_s))
-        assert -np.pi <= float(env.state[3]) < np.pi
-        check_close(
-            env.wrap_angle(float(env.state[3]) - start_heading),
-            np.deg2rad(turn_deg_s) * env.dt,
-        )
-    print("TEST 5 PASSED: heading wrap for left and right turns")
-
-    # TEST 6: Speed violations terminate without clamping the physical speed.
-    for initial_speed, a, flag in (
-        (env.v_max - 0.01, 4.92, "overspeed"),
-        (env.v_min + 0.01, -4.92, "stalled"),
-    ):
-        env.reset(seed=42, speed=initial_speed)
-        start_speed = float(env.state[2])
-        _, _, terminated, truncated, info = env.step(control_action(a, 0))
-        check_close(env.state[2], start_speed + a * env.dt)
-        assert terminated and not truncated and info[flag]
-        assert not info["out_of_bounds"]
-    print("TEST 6 PASSED: overspeed and stall termination, physical speed remains unclamped")
-
-    # TEST 7: Leaving the course terminates and preserves the intermediate path.
-    env.reset(seed=42, x=env.grid_size - 1 - 0.01, y=19, psi_deg=0)
-    _, _, terminated, truncated, info = env.step(control_action(0.0, 0))
-    assert terminated and not truncated and info["out_of_bounds"]
-    assert any(xy[0] > env.grid_size - 1 for xy in env._last_step_path)
-    print("TEST 7 PASSED: out-of-bounds termination")
-
-    # TEST 8: Time-limit truncation and reset of episode bookkeeping.
-    original_max_time = env.MAX_TIME
-    env.MAX_TIME = 2 * env.dt
-    env.reset(seed=42)
-    _, _, terminated, truncated, _ = env.step(control_action(0.0, 0))
-    assert not terminated and not truncated
-    _, _, terminated, truncated, _ = env.step(control_action(0.0, 0))
-    assert not terminated and truncated
-    check_close(env.elapsed_time, 2 * env.dt)
-    assert len(env.state_history) == 3 and len(env.action_history) == 2
-    observation, info = env.reset(seed=42)
-    assert env.n_steps == 0 and env.elapsed_time == 0.0 and env.q == 0
-    assert len(env.state_history) == 1 and env.action_history == []
-    env.MAX_TIME = original_max_time
-    print("TEST 8 PASSED: time-limit truncation and history reset")
-
-    env.close()
-    print("All 8 kinematics checks passed. Race rewards and gate progression are not tested here.")
+    unittest.main(verbosity=2)
