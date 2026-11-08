@@ -1,1 +1,0 @@
-from no_ros2.environments.mock_pylon_env import MockPylonRacingEnv, OBS_SIZE
