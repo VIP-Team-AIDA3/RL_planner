@@ -58,6 +58,8 @@ cover/
 # Translations
 *.mo
 *.pot
+!src/environment/FixedWingPlantGA.mo
+!src/environment/FixedWingPythonSIL.mo
 
 # Django stuff:
 *.log

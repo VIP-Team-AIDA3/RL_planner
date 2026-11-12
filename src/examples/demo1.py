@@ -1,4 +1,5 @@
 import math
+import random
 import sys
 from pathlib import Path
 
@@ -90,11 +91,48 @@ class CustomTECS(FlightController):
         self.AileronPID.reset()
         self.RudderPID.reset()
 
+def random_start_state() -> dict[str, float]:
+    roll = random.uniform(-0.12, 0.12)
+    pitch = random.uniform(-0.06, 0.06)
+    yaw = random.uniform(-math.pi, math.pi)
+    cr, sr = math.cos(roll / 2), math.sin(roll / 2)
+    cp, sp = math.cos(pitch / 2), math.sin(pitch / 2)
+    cy, sy = math.cos(yaw / 2), math.sin(yaw / 2)
+
+    return {
+        "p_n": random.uniform(-5.0, 5.0),
+        "p_e": random.uniform(-5.0, 5.0),
+        "p_d": -random.uniform(15.0, 25.0),
+        "u": random.uniform(4.0, 5.5),
+        "v": random.uniform(-0.2, 0.2),
+        "w": random.uniform(-0.2, 0.2),
+        "q_w": cr * cp * cy + sr * sp * sy,
+        "q_x": sr * cp * cy - cr * sp * sy,
+        "q_y": cr * sp * cy + sr * cp * sy,
+        "q_z": cr * cp * sy - sr * sp * cy,
+        "rate_p": random.uniform(-0.02, 0.02),
+        "rate_q": random.uniform(-0.02, 0.02),
+        "rate_r": random.uniform(-0.02, 0.02),
+    }
+
 def main():
-    demo_env = CustomEnv(CustomTECS())
-    while demo_env.prev_t < 10:
-        demo_env.step({"vdot_des":0.0, "psidot_des":math.pi/6, "gamma_des":0.0}, realtime=True)
-    demo_env.cleanup_sim()
+    demo_env = CustomEnv(
+        CustomTECS(),
+        http_port=8080,
+        websocket_port=8081,
+        initial_state=random_start_state(),
+    )
+    try:
+        while True:
+            print(f"Starting 10-second run with state: {demo_env.initial_state}")
+            while demo_env.prev_t < 10.0:
+                demo_env.step(
+                    {"vdot_des": 0.0, "psidot_des": math.pi / 6, "gamma_des": 0.0},
+                    realtime=True,
+                )
+            demo_env.restart_sim(random_start_state())
+    finally:
+        demo_env.close()
     
 if __name__ == "__main__":
     main()
