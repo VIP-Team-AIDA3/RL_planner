@@ -15,7 +15,7 @@ COURSE1 = "ros2_ws/src/pylon_2026_world/purt_course.yaml"
 
 def _end_of(path_start, word, params, radius):
     from dubins import DubinsPath
-    segs = DubinsPath(np.asarray(path_start, float), None, radius, word, params).segments()
+    segs = DubinsPath(np.asarray(path_start, float), np.asarray(path_start, float), radius, word, params).segments()
     return segs[-1].end if segs else np.asarray(path_start, float)
 
 
@@ -77,7 +77,7 @@ def test_value_iteration_matches_brute_force():
 def test_q_learning_matches_dp_without_noise(env2):
     env, dp_lap = env2
     np.random.seed(0)
-    Q, _, returns, _ = q_learning_with_logging(env, 1.0, 0.1, 0.1, 60_000, 1000)
+    Q, _, _, _ = q_learning_with_logging(env, 1.0, 0.1, 0.1, 60_000, 1000)
     lap = greedy_rollout(env, lambda s: int(np.argmax(Q[s[0], s[1]])))
     assert not lap["crashed"] and lap["cost"] <= 1.02 * dp_lap["cost"]
 

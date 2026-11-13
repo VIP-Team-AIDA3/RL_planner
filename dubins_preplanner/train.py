@@ -189,6 +189,17 @@ def save_lap(env, lap, algo, out_dir, title):
     export_nominal_path(env, lap["state_history"], out_dir / f"{algo}_nominal_path.yaml", algo)
 
 
+def save_laps_side_by_side(env, laps, out_path):
+    # One figure with a panel per algo, e.g. the Q-learning and SARSA laps next to each other
+    import matplotlib.pyplot as plt
+    fig, axes = plt.subplots(1, len(laps), figsize=(10 * len(laps), 8), squeeze=False)
+    for ax, (algo, lap) in zip(axes[0], laps.items()):
+        env.render(ax=ax, title=f"{algo} lap: {lap['length_m']:.2f} m", state_history=lap["state_history"])
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
 def describe(lap):
     if lap["crashed"]:
         return "CRASHED"
@@ -229,6 +240,7 @@ def main(argv=None):
         print(f"dp (noise-aware, noise={cfg['noise']}): mean cost {ev['noisy_cost']:.2f} m, "
               f"crash rate {100 * ev['noisy_crash_rate']:.0f}%, mean min pylon {ev['noisy_min_pylon_m']:.2f} m")
 
+    rl_laps = {}
     trainers = {"q_learning": q_learning_with_logging, "sarsa": sarsa_with_logging}
     for algo in ([args.algo] if args.algo in trainers else list(trainers) if args.algo == "all" else []):
         np.random.seed(cfg["seed"])
@@ -242,6 +254,9 @@ def main(argv=None):
         plot_learning_curve(returns, -dp_lap["cost"], f"{algo} (noise={cfg['noise']})", out_dir / f"{algo}_learning_curve.png")
         if not clean["crashed"]:
             save_lap(env, clean, algo, out_dir, f"{algo} lap: {clean['length_m']:.2f} m")
+            rl_laps[algo] = clean
+    if len(rl_laps) == 2:
+        save_laps_side_by_side(env, rl_laps, out_dir / "q_learning_vs_sarsa_path.png")
     print(f"outputs in {out_dir}")
 
 

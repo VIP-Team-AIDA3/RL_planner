@@ -35,16 +35,18 @@ From the repo root (needs `numpy matplotlib pyyaml gymnasium pytest`; `/usr/loca
 ```
 
 Outputs go to `dubins_preplanner/out/`: `<algo>_path.png`, `<algo>_nominal_path.yaml` and
-`<algo>_learning_curve.png`.
+`<algo>_learning_curve.png`. `--algo all` also writes `q_learning_vs_sarsa_path.png`, the two RL laps
+side by side.
 
 ## How it works
 
 1. **Crossings:** each gate gets 5 positions across its usable width (`gate_margin_m` clear of each
-   pylon) x 10 headings (gate normal +-0/30/60 deg, both directions) = 50 poses.
+   pylon) x 10 headings (gate normal +-0/22/45 deg, both directions) = 50 poses.
 2. **Legs:** every pose on gate k is joined to every pose on gate k+1 by the shortest Dubins path. That's
    15,000 paths on course 2, in about 2 s.
 3. **Cost (m)** = length + 7 x int max(0, R_field - d) ds + 35 per bounds exit. The integral is
-   `race_env`'s pylon robustness. Clipping a pylon ends the episode with -1000.
+   `race_env`'s pylon robustness. Clipping a pylon ends the episode with -1000. So does a leg that
+   crosses its start or end gate a second time: each gate is crossed once.
 4. **State** = (layer, pose), where layer n is crossing G1 again. **Action** = pose on the next gate.
    `NOISE` slips the crossing to a neighboring pose.
 5. **Solving:**
@@ -63,16 +65,17 @@ data of a steady turn) when you have one.
 
 | | Course 2 (`purt_course2.yaml`) | Course 1 (`purt_course.yaml`) |
 |---|---|---|
-| DP lap (noise-free) | **123.47 m** | **46.31 m** (cost 46.69 m) |
-| DP, noise-aware, mean cost with slip | 128.5 m | 55.7 m |
-| Q-learning lap (noise-free) | 128.46 m (+4.0%) | 48.56 m (+4.0%) |
-| Q-learning, mean cost with slip | 141.4 m | 58.0 m |
-| SARSA lap (noise-free) | 211.45 m (+81.9%) | 49.66 m (cost 71.86 m, +53.9%) |
-| SARSA, mean cost with slip | 202.9 m | 76.3 m |
+| DP lap (noise-free) | **123.18 m** | **58.27 m** |
+| DP, noise-aware, mean cost with slip | 127.5 m | 82.8 m |
+| Q-learning lap (noise-free) | 124.80 m (+1.3%) | 60.42 m (cost 86.15 m, +47.9%) |
+| Q-learning, mean cost with slip | 128.4 m | 89.5 m |
+| SARSA lap (noise-free) | 164.30 m (cost 169.56 m, +37.7%) | 131.69 m (cost 172.57 m, +196.2%) |
+| SARSA, mean cost with slip | 179.7 m | 170.9 m |
 
-- **Neither DP lap leaves the bounds.**
-- **Q-learning:** trained with slip, it gets within about 4% of DP. Without noise it reaches the
-  exact DP lap (the test checks this).
+- **Neither DP lap leaves the bounds or enters a pylon's safety radius.**
+- **Q-learning:** trained with slip, it gets within about 1% of DP on course 2. Without noise it
+  reaches the exact DP lap (the test checks this). On course 1 its lap is only 2 m longer than DP's
+  but cuts inside the safety radius, which is where the +48% cost comes from.
 - **SARSA lags well behind at 60k episodes.** With constant ε = 0.1 over 50 actions, its on-policy
   values stay pessimistic.
 - **At the previous 10.7 m radius,** laps on course 1 needed big loops outside the bounds: the turn

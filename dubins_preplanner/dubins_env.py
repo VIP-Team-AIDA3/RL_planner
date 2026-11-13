@@ -9,7 +9,8 @@ State  = (layer, pose): layer k < n is "crossing gate k", layer n is "crossing G
 Action = pose index on the next gate. Poses = N_CROSSING_POINTS positions across the gate's usable
          width x headings (gate normal + each offset, both directions).
 Reward = -(leg length + PYLON_PENALTY * int max(0, R_field - d) ds + OOB_PENALTY * exits), in meters.
-         Clipping a pylon ends the episode with CRASH_REWARD.
+         Clipping a pylon, or crossing the leg's start or end gate a second time, ends the episode
+         with CRASH_REWARD.
 """
 
 import sys
@@ -119,15 +120,13 @@ class DubinsGateEnv(gym.Env):
     def recrosses(pts, gate):
         # True if the polyline crosses the gate segment (pts excludes the endpoint that sits on the gate, so
         # the one legitimate crossing is not counted: a leg may go through its gates once, never back over them)
-        p1, p2 = gate["p1"], gate["p2"]
-        side = np.sign((p2[0] - p1[0]) * (pts[:, 1] - p1[1]) - (p2[1] - p1[1]) * (pts[:, 0] - p1[0]))
+        p1, d = gate["p1"], gate["p2"] - gate["p1"]
+        side = d[0] * (pts[:, 1] - p1[1]) - d[1] * (pts[:, 0] - p1[0])  # signed: which side of the gate line
+        pts, side = pts[side != 0], side[side != 0]  # a sample exactly on the line must not hide a crossing
         flip = np.nonzero(side[:-1] * side[1:] < 0)[0]
         if len(flip) == 0:
             return False
-        d = p2 - p1
-        a, b = pts[flip], pts[flip + 1]
-        sa = np.cross(d, a - p1)
-        sb = np.cross(d, b - p1)
+        a, b, sa, sb = pts[flip], pts[flip + 1], side[flip], side[flip + 1]
         x = a + (b - a) * (sa / (sa - sb))[:, None]  # where the sample segment meets the gate line
         t = (x - p1) @ d / (d @ d)
         return bool(np.any((t >= 0) & (t <= 1)))
