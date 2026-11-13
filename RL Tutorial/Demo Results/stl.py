@@ -4,7 +4,7 @@ Everything that implements the BHNR order reward lives in this one file, in four
 
     1. Constants          H_t labels (H_NONE / H_NEG / H_POS), REWARD_MODES, STL_REWARDS
     2. BHNR math          until_robustness, h_label, n_h_classes, BHNRWindow, bhnr_series      (pure: no env, no gym)
-    3. Weight scaling     HOVER_RHO_HAT, hover_gain_per_step, robustness_weight                (hover-aware weights)
+    3. Weight scaling     HOVER_RHO_HAT, hover_gain_per_step, robustness_weight, calibrate_hover_rho   (hover-aware weights)
     4. Environment        STLOrderMonitor                                                      (wraps the race env)
 
 Per stage, with q = gates crossed so far:   target = GATES[q] (G_k, k = q + 1),  avoid = GATES[q+1] (G_{k+1})
@@ -51,11 +51,11 @@ from collections import deque
 import numpy as np
 from gymnasium import spaces
 
-from race_env import GateSequenceMonitor, point_segment_distance
+from race_env import GateSequenceMonitor, RaceEnv, point_segment_distance, segment_intersection
 
 __all__ = ["H_NONE", "H_NEG", "H_POS", "REWARD_MODES", "STL_REWARDS",
            "until_robustness", "h_label", "n_h_classes", "BHNRWindow", "bhnr_series",
-           "HOVER_RHO_HAT", "hover_gain_per_step", "robustness_weight",
+           "HOVER_RHO_HAT", "hover_gain_per_step", "robustness_weight", "calibrate_hover_rho",
            "STLOrderMonitor"]
 
 # =====================================================================================================================
@@ -168,7 +168,7 @@ def bhnr_series(rho_target, rho_avoid, window_len=3, overlap=0):
 # 3. WEIGHT SCALING  (how big can the robustness-mode weight be before hovering pays?)
 # =====================================================================================================================
 
-# Best STL reward a non-crossing hover can earn per window, measured on purt_course.yaml by hover_analysis.py.
+# Best STL reward a non-crossing hover can earn per window, measured on purt_course.yaml by calibrate_hover_rho() below.
 # It is the same for every (window_len, overlap): any window of >= 2 states contains both oscillation cells.
 HOVER_RHO_HAT = 2.58
 
@@ -182,6 +182,38 @@ def robustness_weight(f, window_len, overlap, rho_hat=HOVER_RHO_HAT):
     """Weight giving hover gain = f per step, i.e. hovering nets (f - 1) against the -1 neutral step cost.
     f < 1 keeps hovering a net cost; f = 1 is exactly break-even."""
     return f * (window_len - overlap) / rho_hat
+
+
+def calibrate_hover_rho(course_path, window_len=1, overlap=0, r1=3.0, r2=9.5, target=1, avoid=2):
+    """Measure HOVER_RHO_HAT on a course: the best window robustness an agent can sustain by oscillating between two
+    adjacent grid cells that are clear of the pylon field and whose move does NOT cross the target gate.
+
+    Returns (rho_hat, (xy_a, xy_b)): the robustness per window and the two cells that achieve it. Any window of >= 2
+    states contains both cells, so the result is the same for every (window_len, overlap) with window_len >= 1.
+    """
+    env = RaceEnv(course_path, CELL_SIZE_M=1.0, MAX_STEPS=400, NOISE=0)
+    monitor = STLOrderMonitor(env, REWARDS=STL_REWARDS, r1=r1, r2=r2, first_stage=1)
+    gate = env.GATES[target]
+    cells = {}
+    for idx in range(env.GRID_NX * env.GRID_NY):
+        xy = env.grid_to_xy(idx)
+        cells[idx] = (monitor.rho_gate(xy, target), monitor.rho_not_gate(xy, avoid), xy,
+                      min(np.linalg.norm(xy - p["xy"]) for p in env.PYLONS))
+
+    def legal(a, b):
+        return (cells[a][3] > env.PYLON_FIELD_R_M and cells[b][3] > env.PYLON_FIELD_R_M
+                and segment_intersection(cells[a][2], cells[b][2], gate["p1"], gate["p2"]) is None)
+
+    nx, best = env.GRID_NX, (-np.inf, None)
+    for a in cells:
+        for b in (a + 1 if a % nx + 1 < nx else None, a + nx if a + nx in cells else None):   # right and up neighbours
+            if b is not None and legal(a, b):
+                seq = [a, b] * 30
+                series = bhnr_series([cells[i][0] for i in seq], [cells[i][1] for i in seq], window_len, overlap)
+                rho = float(np.mean([r for _, r in series[len(series) // 2:]]))                # steady state only
+                if rho > best[0]:
+                    best = (rho, (cells[a][2], cells[b][2]))
+    return best
 
 
 # =====================================================================================================================
