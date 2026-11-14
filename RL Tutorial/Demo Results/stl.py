@@ -2,9 +2,9 @@
 
 Everything that implements the BHNR order reward lives in this one file, in four sections:
 
-    1. Constants          H_t labels (H_NONE / H_NEG / H_POS), REWARD_MODES, STL_REWARDS
+    1. Constants          H_t labels, REWARD_MODES, STL_REWARDS, and STL_CONFIG
     2. BHNR math          until_robustness, h_label, n_h_classes, BHNRWindow, bhnr_series      (pure: no env, no gym)
-    3. Weight scaling     HOVER_RHO_HAT, hover_gain_per_step, robustness_weight, calibrate_hover_rho   (hover-aware weights)
+    3. Weight scaling     HOVER_RHO_HAT, hover_gain_per_step, robustness_weight                (hover-aware weights)
     4. Environment        STLOrderMonitor                                                      (wraps the race env)
 
 Per stage, with q = gates crossed so far:   target = GATES[q] (G_k, k = q + 1),  avoid = GATES[q+1] (G_{k+1})
@@ -18,7 +18,7 @@ The sup and inf only look inside the window -- the difference from the full-hist
 good state pinned the sup for the rest of the stage.
 
 Window schedule (lengths counted in ACTIONS, so a window spans window_len + 1 states):
-    window_len = 3, overlap = 0  ->  windows over states [0..3], [3..6], [6..9], ...
+    window_len = 1, overlap = 0  ->  windows over states [0..1], [1..2], [2..3], ...
     window_len = 3, overlap = 1  ->  windows over states [0..3], [2..5], [4..7], ...
     stride = window_len - overlap is how many actions pass between two window closings.
 
@@ -39,10 +39,10 @@ STLOrderMonitor runs two separate computations side by side:
     remain comparable with the old cumulative-dH results.
 
 Quick start:
-    from stl import STLOrderMonitor, STL_REWARDS, robustness_weight
-    w = robustness_weight(f=0.5, window_len=1, overlap=0)                 # hover-safe weight for robustness mode
-    env = STLOrderMonitor(race_env, REWARDS={**STL_REWARDS, "stl_order": w}, r1=3.0, r2=9.5,
-                          window_len=1, overlap=0, reward_mode="robustness")
+    from stl import STLOrderMonitor, STL_CONFIG
+    env = STLOrderMonitor(race_env)  # uses the defaults in STL_CONFIG
+    # Override individual settings when running an experiment:
+    # env = STLOrderMonitor(race_env, window_len=3, overlap=1)
 Tests: test_stl_bhnr.ipynb.
 """
 
@@ -51,11 +51,11 @@ from collections import deque
 import numpy as np
 from gymnasium import spaces
 
-from race_env import GateSequenceMonitor, RaceEnv, point_segment_distance, segment_intersection
+from race_env import GateSequenceMonitor, point_segment_distance
 
-__all__ = ["H_NONE", "H_NEG", "H_POS", "REWARD_MODES", "STL_REWARDS",
+__all__ = ["H_NONE", "H_NEG", "H_POS", "REWARD_MODES", "STL_REWARDS", "STL_CONFIG", "validate_stl_config",
            "until_robustness", "h_label", "n_h_classes", "BHNRWindow", "bhnr_series",
-           "HOVER_RHO_HAT", "hover_gain_per_step", "robustness_weight", "calibrate_hover_rho",
+           "HOVER_RHO_HAT", "hover_gain_per_step", "robustness_weight",
            "STLOrderMonitor"]
 
 # =====================================================================================================================
@@ -72,7 +72,7 @@ REWARD_MODES = ("robustness", "delta")
 # "stl_order" is the weight on the BHNR term. With reward_mode="robustness" the term is w * rho, and rho
 # is roughly -(distance to gate k - r1) while far from gate k, so useful weights are much smaller than
 # for the old w * dH reward. Tune it (see tune-weights.ipynb) or derive it with robustness_weight().
-STL_REWARDS = {"neutral": -1, "midpoint": 1000, "endpoint": 1000, "pylon_field": -300, "stl_order": 1.0}
+STL_REWARDS = {"neutral": -1, "midpoint": 1000, "endpoint": 1000, "pylon_field": -300, "stl_order": 0.1938}
 
 
 # =====================================================================================================================
@@ -168,7 +168,7 @@ def bhnr_series(rho_target, rho_avoid, window_len=3, overlap=0):
 # 3. WEIGHT SCALING  (how big can the robustness-mode weight be before hovering pays?)
 # =====================================================================================================================
 
-# Best STL reward a non-crossing hover can earn per window, measured on purt_course.yaml by calibrate_hover_rho() below.
+# Best STL reward a non-crossing hover can earn per window, measured on purt_course.yaml by hover_analysis.py.
 # It is the same for every (window_len, overlap): any window of >= 2 states contains both oscillation cells.
 HOVER_RHO_HAT = 2.58
 
@@ -184,36 +184,56 @@ def robustness_weight(f, window_len, overlap, rho_hat=HOVER_RHO_HAT):
     return f * (window_len - overlap) / rho_hat
 
 
-def calibrate_hover_rho(course_path, window_len=1, overlap=0, r1=3.0, r2=9.5, target=1, avoid=2):
-    """Measure HOVER_RHO_HAT on a course: the best window robustness an agent can sustain by oscillating between two
-    adjacent grid cells that are clear of the pylon field and whose move does NOT cross the target gate.
+# Default experiment configuration. These values are the recommended starting point for
+# the final-lap experiment; STLOrderMonitor uses them unless an argument is overridden.
+# The weight is rounded to four decimals for a readable, reproducible config.
+STL_CONFIG = {
+    "mode": "robustness",
+    "stl_order": round(robustness_weight(f=0.5, window_len=1, overlap=0), 4),
+    "window_length": 1,       # one action; each window contains two states
+    "overlap": 0,             # stride = 1; a window closes on every step after the first
+    "r1": 3.0,                # target-gate radius (m)
+    "r2": 9.5,                # exclusion radius around the next gate (m)
+    "first_stage": 1,         # skip stage 0; score the G2 and G3 clauses
+    "H_BINS": [0.0],          # NONE / NEG (rho <= 0) / POS (rho > 0)
+}
 
-    Returns (rho_hat, (xy_a, xy_b)): the robustness per window and the two cells that achieve it. Any window of >= 2
-    states contains both cells, so the result is the same for every (window_len, overlap) with window_len >= 1.
-    """
-    env = RaceEnv(course_path, CELL_SIZE_M=1.0, MAX_STEPS=400, NOISE=0)
-    monitor = STLOrderMonitor(env, REWARDS=STL_REWARDS, r1=r1, r2=r2, first_stage=1)
-    gate = env.GATES[target]
-    cells = {}
-    for idx in range(env.GRID_NX * env.GRID_NY):
-        xy = env.grid_to_xy(idx)
-        cells[idx] = (monitor.rho_gate(xy, target), monitor.rho_not_gate(xy, avoid), xy,
-                      min(np.linalg.norm(xy - p["xy"]) for p in env.PYLONS))
+# Keep the reward dictionary and the monitor defaults synchronized with STL_CONFIG.
+STL_REWARDS["stl_order"] = STL_CONFIG["stl_order"]
 
-    def legal(a, b):
-        return (cells[a][3] > env.PYLON_FIELD_R_M and cells[b][3] > env.PYLON_FIELD_R_M
-                and segment_intersection(cells[a][2], cells[b][2], gate["p1"], gate["p2"]) is None)
 
-    nx, best = env.GRID_NX, (-np.inf, None)
-    for a in cells:
-        for b in (a + 1 if a % nx + 1 < nx else None, a + nx if a + nx in cells else None):   # right and up neighbours
-            if b is not None and legal(a, b):
-                seq = [a, b] * 30
-                series = bhnr_series([cells[i][0] for i in seq], [cells[i][1] for i in seq], window_len, overlap)
-                rho = float(np.mean([r for _, r in series[len(series) // 2:]]))                # steady state only
-                if rho > best[0]:
-                    best = (rho, (cells[a][2], cells[b][2]))
-    return best
+def validate_stl_config(config=STL_CONFIG):
+    """Validate a configuration dictionary before constructing the STL monitor."""
+    required = ("mode", "stl_order", "window_length", "overlap",
+                "r1", "r2", "first_stage", "H_BINS")
+    missing = [key for key in required if key not in config]
+    if missing:
+        raise KeyError(f"Missing STL configuration keys: {missing}")
+
+    if config["mode"] not in REWARD_MODES:
+        raise ValueError(f"mode must be one of {REWARD_MODES}, got {config['mode']!r}")
+    if int(config["window_length"]) < 1:
+        raise ValueError("window_length must be >= 1")
+    if not 0 <= int(config["overlap"]) < int(config["window_length"]):
+        raise ValueError("overlap must satisfy 0 <= overlap < window_length")
+    if float(config["r1"]) <= 0 or float(config["r2"]) <= 0:
+        raise ValueError("r1 and r2 must be positive")
+    if int(config["first_stage"]) < 0:
+        raise ValueError("first_stage must be >= 0")
+    if not np.isfinite(float(config["stl_order"])):
+        raise ValueError("stl_order must be finite")
+
+    bins = tuple(float(b) for b in config["H_BINS"])
+    if any(not np.isfinite(b) for b in bins) or tuple(sorted(bins)) != bins:
+        raise ValueError("H_BINS must contain finite, ascending thresholds")
+
+    # stl_order is intentionally only checked for finiteness: it is a tunable
+    # hyperparameter. The default value is initialized from robustness_weight()
+    # below, but experiments may override it after measuring lap performance.
+    return True
+
+
+validate_stl_config()
 
 
 # =====================================================================================================================
@@ -221,8 +241,11 @@ def calibrate_hover_rho(course_path, window_len=1, overlap=0, r1=3.0, r2=9.5, ta
 # =====================================================================================================================
 
 class STLOrderMonitor(GateSequenceMonitor):
-    def __init__(self, env, REWARDS=STL_REWARDS, r1=3.0, r2=3.0, first_stage=1,
-                 window_len=3, overlap=1, reward_mode="robustness", H_BINS=None, observe_label=True):
+    def __init__(self, env, REWARDS=STL_REWARDS,
+                 r1=STL_CONFIG["r1"], r2=STL_CONFIG["r2"],
+                 first_stage=STL_CONFIG["first_stage"],
+                 window_len=STL_CONFIG["window_length"], overlap=STL_CONFIG["overlap"],
+                 reward_mode=STL_CONFIG["mode"], H_BINS=None, observe_label=True):
         if r1 <= 0 or r2 <= 0:
             raise ValueError(f"r1 and r2 must be positive, got r1={r1}, r2={r2}")
         if reward_mode not in REWARD_MODES:
@@ -237,7 +260,8 @@ class STLOrderMonitor(GateSequenceMonitor):
         self.observe_label = bool(observe_label)   # False: H_t is never shown (plain-Q-learning control; reward unchanged)
         self.window = BHNRWindow(window_len, overlap)
         # H_BINS are thresholds on rho(window). Default (0.0,): NONE / NEG (rho <= 0) / POS (rho > 0).
-        self.h_bins = (0.0,) if H_BINS is None else tuple(sorted(float(b) for b in H_BINS))
+        bins = STL_CONFIG["H_BINS"] if H_BINS is None else H_BINS
+        self.h_bins = tuple(sorted(float(b) for b in bins))
 
         self.observation_space = spaces.Tuple((
             env.observation_space,
