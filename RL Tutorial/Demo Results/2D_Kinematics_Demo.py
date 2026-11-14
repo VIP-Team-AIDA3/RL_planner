@@ -14,7 +14,7 @@ from pathlib import Path
 class PureKinematicGrid(gym.Env):
     def __init__(self, grid_size=38, v_max=8.0, a_max=4.92, grid_density=20, lambda_accel=0.0001,
     MAX_TIME=200.0, course_path= None, rewards=None, dt=0.1,
-    reward_field_exponent=0.5, num_a_values=5, num_angle_values=7,
+    reward_field_exponent=0.5, num_a_values=9, num_angle_values=7,
     max_turn_rate_deg_s=30.0):
         super().__init__()
         if (isinstance(num_angle_values, (bool, np.bool_))
@@ -39,7 +39,7 @@ class PureKinematicGrid(gym.Env):
 
         self.reward_field_exponent = reward_field_exponent # Postponing this for now
 
-        self.integration_dt = 0.01 # internal max integration substep -> the physics is eval every 0.01 seconds but the agent chooses an action every 0.1 seconds
+        self.integration_dt = 0.01 # maximum time spacing between analytical trajectory samples
         self.dt = float(dt) # Seconds per action, independent of spatial resolution.
         self.plot_dt = min(self.dt / 10.0, 0.01)
 
@@ -104,7 +104,7 @@ class PureKinematicGrid(gym.Env):
             low=lower_bounds, high=upper_bounds, shape=(5,), dtype=np.float32) # observation space with bounds specified above
 
         # Bin counts are exact; turn_values contains heading rates in rad/s.
-        self.accel_values = np.linspace(0, self.a_max, self.num_a_values)
+        self.accel_values = np.linspace(-self.a_max, self.a_max, self.num_a_values)
         self.turn_values = np.linspace(
             -self.max_turn_rate_rad_s, self.max_turn_rate_rad_s,
             self.num_angle_values,
@@ -153,52 +153,57 @@ class PureKinematicGrid(gym.Env):
         """Wrap a course angle [-pi, pi)"""
         return (float(angle) + np.pi) % (2.0 * np.pi) - np.pi
 
-    def integrate_control_action(self, action): #TODO: need to verify geometrically that the math works out
-        """Move a 2D point using polar acceleration and velocity."""
+    def integrate_control_action(self, action):
+        """Apply the analytical motion updates in equations (18), (21)-(23)."""
 
         # RL chooses tangential acceleration and turning rate
-        a, omega = self.action_to_control[int(action)]
-        x, y, v, psi = map(float, self.state)
+        a_parallel, omega = self.action_to_control[int(action)]
+        x_k, y_k, v_k, psi_k = map(float, self.state)
         
-        # Physics integration substeps
-    
-        # Multi rate simulation: the RL agent selects a new action every
-        # self.dt seconds (10 Hz by default), while the physics updates
-        # at a higher frequency (100 Hz by default).
-        # Hold the agent's action constant during these physics substeps.
-        # Calculate enough substeps to cover the full control interval (stored in n_substeps),
-        # with at least 10 substeps for accuracy.
-        # sub_dt makes sure their durations sum to exactly self.dt.
-        # The RL agent selects actions at 10 Hz, while the physics
-        # integrates at 100 Hz using the same held command.
-        # This does not introduce noise, but limits how quickly
-        # the agent can respond to disturbances or changing conditions.
-        # Actual disturbances and sensor noise must be modeled separately.
+        # Hold the control constant over the RL interval. Sample its exact
+        # trajectory for gate/boundary checks and plotting, with at least
+        # ten segments and spacing no greater than integration_dt.
         n_substeps = max(10, int(np.ceil(self.dt / self.integration_dt)))
 
         sub_dt = self.dt / n_substeps
-        path = [np.array([x, y])]
+        path = [np.array([x_k, y_k])]
 
-        for _ in range(n_substeps):
-            #Midpoint values between each substep
-            v_mid = v + 0.5 * a * sub_dt
-            psi_mid = psi + 0.5 * omega * sub_dt
+        for index in range(1, n_substeps + 1):
+            # Evaluate every sample from the initial state, avoiding integration drift.
+            t = index * sub_dt
+            psi_next = psi_k + omega * t
 
-            #Update Position Values
-            x += v_mid * np.cos(psi_mid) * sub_dt
-            y += v_mid * np.sin(psi_mid) * sub_dt
+            if omega == 0.0:
+                # Equation (23): straight-line motion.
+                x_next = x_k + (v_k * t + 0.5 * a_parallel * t**2) * np.cos(psi_k)
+                y_next = y_k + (v_k * t + 0.5 * a_parallel * t**2) * np.sin(psi_k)
+            else:
+                # Equation (21).
+                x_next = (
+                    x_k
+                    + v_k / omega * (np.sin(psi_next) - np.sin(psi_k))
+                    + a_parallel * t / omega * np.sin(psi_next)
+                    + a_parallel / omega**2 * (np.cos(psi_next) - np.cos(psi_k))
+                )
+                # Equation (22).
+                y_next = (
+                    y_k
+                    + v_k / omega * (np.cos(psi_k) - np.cos(psi_next))
+                    - a_parallel * t / omega * np.cos(psi_next)
+                    + a_parallel / omega**2 * (np.sin(psi_next) - np.sin(psi_k))
+                )
+            path.append(np.array([x_next, y_next]))
 
-            #update speed and heading
-            v += a * sub_dt
-            psi = self.wrap_angle(psi + omega * sub_dt)
+        # Equation (18): speed and heading at the next RL time step.
+        v_next = v_k + a_parallel * self.dt
+        psi_next = self.wrap_angle(psi_k + omega * self.dt)
 
-            path.append(np.array([x, y]))
-
-        self.state = np.array([x, y, v, psi], dtype=np.float32)
+        self.state = np.array([x_next, y_next, v_next, psi_next], dtype=np.float32)
 
         return path, {
-        "applied_a_m_s2": float(a),
-        "applied_omega_deg_s": float(np.rad2deg(omega)), }
+            "applied_a_m_s2": float(a_parallel),
+            "applied_omega_deg_s": float(np.rad2deg(omega)),
+        }
 
     #TODO: Needs to calculate and return the rewards
     def step(self, action, ignore_truncation=False):
@@ -593,7 +598,7 @@ if __name__ == "__main__":
     import unittest
 
     class KinematicsTests(unittest.TestCase):
-        """Run this file to check the current nonnegative-acceleration model."""
+        """Run this file to check the signed-acceleration kinematics model."""
 
         def setUp(self):
             self.env = PureKinematicGrid()
@@ -615,12 +620,12 @@ if __name__ == "__main__":
         # TEST 1: Exact bin counts, endpoints, spacing, and unique action IDs.
         def test_01_default_bins(self):
             env = self.env
-            self.close(env.accel_values, [0, 1.23, 2.46, 3.69, 4.92])
+            self.close(env.accel_values, [-4.92, -3.69, -2.46, -1.23, 0, 1.23, 2.46, 3.69, 4.92])
             self.close(np.rad2deg(env.turn_values), [-30, -20, -10, 0, 10, 20, 30])
-            self.assertEqual(env.action_space.n, 35)
-            self.assertEqual(set(env.action_to_control), set(range(35)))
+            self.assertEqual(env.action_space.n, 63)
+            self.assertEqual(set(env.action_to_control), set(range(63)))
             controls = list(env.action_to_control.values())
-            self.assertEqual(len(set(controls)), 35)
+            self.assertEqual(len(set(controls)), 63)
             self.assertEqual(controls.count((0.0, 0.0)), 1)
 
         # TEST 2: Reject even counts with a clear message before initialization.
@@ -687,15 +692,21 @@ if __name__ == "__main__":
                     self.assertTrue(-np.pi <= float(self.env.state[3]) < np.pi)
                     self.close(info["applied_omega_deg_s"], np.rad2deg(omega))
 
-        # TEST 7: Overspeed must terminate without clamping physical speed.
-        def test_07_overspeed(self):
+        # TEST 7: Overspeed and stall terminate without clamping physical speed.
+        def test_07_speed_limits(self):
             self.env.reset(seed=42, speed=7.99)
             speed = float(self.env.state[2])
             _, _, done, truncated, info = self.env.step(self.action(self.env.a_max, 0))
             self.close(self.env.state[2], speed + self.env.a_max * self.env.dt)
             self.assertTrue(done and info["overspeed"])
             self.assertFalse(truncated or info["stalled"])
-            # Nonnegative controls cannot produce a stall from a valid reset speed.
+            self.env.reset(seed=42, speed=self.env.v_min + 0.01)
+            speed = float(self.env.state[2])
+            _, _, done, truncated, info = self.env.step(self.action(-self.env.a_max, 0))
+            self.close(self.env.state[2], speed - self.env.a_max * self.env.dt)
+            self.assertTrue(done and info["stalled"])
+            self.assertFalse(truncated or info["overspeed"])
+
             for speed in (self.env.v_min - 0.1, self.env.v_max + 0.1):
                 with self.assertRaises(ValueError):
                     self.env.reset(speed=speed)
@@ -751,14 +762,15 @@ if __name__ == "__main__":
                                             a_max=3.0, max_turn_rate_deg_s=20.0)
                     self.addCleanup(env.close)
                     self.assertEqual(env.action_space.n, na * nt)
-                    self.close(env.accel_values[[0, -1]], [0.0, 3.0])
-                    self.close(np.diff(env.accel_values), 3.0 / (na - 1))
+                    self.close(env.accel_values[[0, -1]], [-3.0, 3.0])
+                    self.close(np.diff(env.accel_values), 6.0 / (na - 1))
                     self.close(np.rad2deg(env.turn_values[[0, -1]]), [-20.0, 20.0])
                     self.close(np.diff(np.rad2deg(env.turn_values)), 40.0 / (nt - 1))
                     expected = {(float(a), float(w))
                                 for a in env.accel_values for w in env.turn_values}
                     self.assertEqual(set(env.action_to_control.values()), expected)
-                    self.assertEqual(list(env.action_to_control.values()).count((0.0, 0.0)), 1)
+                    self.assertEqual(list(env.action_to_control.values()).count((0.0, 0.0)),
+                                     1 if na % 2 else 0)
 
         # TEST 12: Acceleration while turning, using independent high-order quadrature
         # of (v0 + a*t)*[cos(psi0 + omega*t), sin(psi0 + omega*t)].
@@ -778,7 +790,7 @@ if __name__ == "__main__":
                         headings = start[3] + omega * times
                         dx = time / 2 * np.dot(weights, speeds * np.cos(headings))
                         dy = time / 2 * np.dot(weights, speeds * np.sin(headings))
-                        self.close(path[index], start[:2] + [dx, dy], atol=5e-6)
+                        self.close(path[index], start[:2] + [dx, dy], atol=1e-11)
                     self.close(self.env.state[2], start[2] + a * self.env.dt)
 
         # TEST 13: A control interval need not be a multiple of integration_dt.
@@ -805,5 +817,36 @@ if __name__ == "__main__":
             self.assertEqual(observation.shape, (5,))
             self.assertTrue(self.env.observation_space.contains(observation))
             self.assertEqual(observation[4], self.env.q)
+
+        def test_15_exact_trajectory_edge_cases(self):
+            """Check straight motion and wrapped turns by independent quadrature."""
+            nodes, weights = np.polynomial.legendre.leggauss(64)
+            env = self.env
+            for dt in (0.135, 1.7):
+                env.dt = dt
+                # Deliberately use coarse samples: accuracy must not depend on them.
+                env.integration_dt = dt
+                # The literal equations lose precision for near-zero nonzero
+                # rates; check finite turns and the separate exact-zero branch.
+                for angle in (0.0, 0.05, -0.05, 2.0, -2.0):
+                    for acceleration in (0.0, env.a_max):
+                        with self.subTest(dt=dt, angle=angle, a=acceleration):
+                            env.reset(psi_deg=179)
+                            start = env.state.astype(float).copy()
+                            omega = angle / dt
+                            env.action_to_control[0] = (acceleration, omega)
+                            path, _ = env.integrate_control_action(0)
+                            for point, t in zip(path, np.linspace(0, dt, len(path))):
+                                times = (nodes + 1) * t / 2
+                                speeds = start[2] + acceleration * times
+                                headings = start[3] + omega * times
+                                expected = start[:2] + t / 2 * np.array([
+                                    np.dot(weights, speeds * np.cos(headings)),
+                                    np.dot(weights, speeds * np.sin(headings)),
+                                ])
+                                self.close(point, expected, atol=1e-10)
+                            self.close(env.state[:2], path[-1])
+                            self.close(env.state[2], start[2] + acceleration * dt)
+                            self.close(env.state[3], env.wrap_angle(start[3] + angle))
 
     unittest.main(verbosity=2)
