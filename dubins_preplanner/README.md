@@ -36,7 +36,7 @@ From the repo root (needs `numpy matplotlib pyyaml gymnasium pytest`; `/usr/loca
 
 Outputs go to `dubins_preplanner/out/`: `<algo>_path.png`, `<algo>_nominal_path.yaml` and
 `<algo>_learning_curve.png`. `--algo all` also writes `q_learning_vs_sarsa_path.png`, the two RL laps
-side by side.
+overlaid on one course plot.
 
 ## How it works
 

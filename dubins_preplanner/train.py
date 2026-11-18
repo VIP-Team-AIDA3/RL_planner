@@ -189,12 +189,23 @@ def save_lap(env, lap, algo, out_dir, title):
     export_nominal_path(env, lap["state_history"], out_dir / f"{algo}_nominal_path.yaml", algo)
 
 
-def save_laps_side_by_side(env, laps, out_path):
-    # One figure with a panel per algo, e.g. the Q-learning and SARSA laps next to each other
+def save_laps_overlaid(env, laps, out_path):
+    # All laps on one course plot, one color per algo, e.g. Q-learning against SARSA
     import matplotlib.pyplot as plt
-    fig, axes = plt.subplots(1, len(laps), figsize=(10 * len(laps), 8), squeeze=False)
-    for ax, (algo, lap) in zip(axes[0], laps.items()):
-        env.render(ax=ax, title=f"{algo} lap: {lap['length_m']:.2f} m", state_history=lap["state_history"])
+    fig, ax = plt.subplots(figsize=(10, 8))
+    for (algo, lap), color in zip(laps.items(), ("#2a78d6", "#c2185b", "#2e9d57", "#7b4fc4")):
+        legs = env.lap_paths(lap["state_history"])
+        pts = np.concatenate([leg.sample(0.2)[:, :2] for leg in legs])
+        crossings = np.array([legs[0].start] + [leg.end for leg in legs])
+        ax.plot(pts[:, 0], pts[:, 1], color=color, lw=3, alpha=0.85, zorder=2, solid_capstyle="round",
+                label=f"{algo}: {lap['length_m']:.2f} m")
+        ax.quiver(crossings[:, 0], crossings[:, 1], np.cos(crossings[:, 2]), np.sin(crossings[:, 2]), color=color,
+                  angles="xy", scale_units="xy", scale=0.25, width=0.004, zorder=3)
+        ax.scatter(*crossings[0, :2], color="forestgreen", marker="s", s=120, zorder=4)
+        ax.scatter(*crossings[-1, :2], color=color, marker="*", s=250, edgecolor="black", zorder=4)
+    ax.scatter([], [], color="forestgreen", marker="s", s=120, label="Start")
+    ax.scatter([], [], color="white", marker="*", s=250, edgecolor="black", label="Finish (lap color)")
+    env.render(ax=ax, title=" vs ".join(laps), state_history=lap["state_history"][:1])  # course only, no lap
     fig.tight_layout()
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
@@ -256,7 +267,7 @@ def main(argv=None):
             save_lap(env, clean, algo, out_dir, f"{algo} lap: {clean['length_m']:.2f} m")
             rl_laps[algo] = clean
     if len(rl_laps) == 2:
-        save_laps_side_by_side(env, rl_laps, out_dir / "q_learning_vs_sarsa_path.png")
+        save_laps_overlaid(env, rl_laps, out_dir / "q_learning_vs_sarsa_path.png")
     print(f"outputs in {out_dir}")
 
 
