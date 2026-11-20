@@ -1,0 +1,42 @@
+[
+ {
+  "mode": "robustness",
+  "window_len": 1,
+  "overlap": 0,
+  "w": 0,
+  "label": false,
+  "seed": 67
+ },
+ {
+  "mode": "robustness",
+  "window_len": 1,
+  "overlap": 0,
+  "w": 0,
+  "label": false,
+  "seed": 123
+ },
+ {
+  "mode": "robustness",
+  "window_len": 1,
+  "overlap": 0,
+  "w": 0,
+  "label": false,
+  "seed": 42
+ },
+ {
+  "mode": "robustness",
+  "window_len": 1,
+  "overlap": 0,
+  "w": 0,
+  "label": false,
+  "seed": 7
+ },
+ {
+  "mode": "robustness",
+  "window_len": 1,
+  "overlap": 0,
+  "w": 0,
+  "label": false,
+  "seed": 99
+ }
+]

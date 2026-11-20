@@ -220,3 +220,5 @@ RL Tutorial/Demo Results/stl_experiment_2
 
 #my requirements.txt w/ other dependencies
 my_requirements.txt
+# Q-tables saved by sweep_2.run_jobs(q_dir=...) (large; regenerate by rerunning the jobs)
+RL Tutorial/Demo Results/q_tables/

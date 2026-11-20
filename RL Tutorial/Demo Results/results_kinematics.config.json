@@ -1,0 +1,69 @@
+{
+ "config": "30dfb45213",
+ "REWARDS": {
+  "neutral": -2.0,
+  "midpoint": 9000.0,
+  "endpoint": 24000.0,
+  "pylon_field": -500.0,
+  "overspeed": -1500.0,
+  "underspeed": -5.0,
+  "out_of_bounds": -20000.0,
+  "reward_field": 1.0,
+  "progress": 50.0
+ },
+ "CRASH_PENALTY": -20000.0,
+ "physics": {
+  "dt": 0.1,
+  "MAX_TIME": 200.0,
+  "v_min": 3.39,
+  "v_max": 8.0,
+  "a_max": 4.92,
+  "n_actions": 63.0,
+  "max_turn_rate_deg_s": 29.999999999999996
+ },
+ "START": {
+  "x": 30.0,
+  "y": 57.5,
+  "speed": 4.83,
+  "psi_deg": 180.0
+ },
+ "COURSE_OFFSET": [
+  45.0,
+  65.0
+ ],
+ "obs_bins": {
+  "DIST_EDGES": [
+   5.0,
+   10.0,
+   20.0,
+   40.0
+  ],
+  "SPEED_EDGES": [
+   5.0,
+   5.5,
+   6.0,
+   6.5,
+   7.0,
+   7.5
+  ],
+  "N_BEARING": 12,
+  "N_NEXT_BEARING": 6
+ },
+ "course_sha1": "1cf52e7dba62",
+ "train": {
+  "ALPHA": 0.1,
+  "GAMMA": 0.995,
+  "EPS_END": 0.05,
+  "REWARD_SCALE": 0.001,
+  "EXPLORE_PROB": 0.5,
+  "eval_every": 1000,
+  "eval_seed_start": 1000,
+  "eval_seeds": 20,
+  "test_seed_start": 5000,
+  "test_seeds": 50,
+  "R1": 3.0,
+  "H_BINS": [
+   0.0
+  ]
+ }
+}

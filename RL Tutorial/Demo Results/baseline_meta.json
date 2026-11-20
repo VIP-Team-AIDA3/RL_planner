@@ -1,0 +1,41 @@
+{
+ "what": "PLAIN baseline (no STL) for the kinematics STL sweep, trained by kinematics_agents2.ipynb",
+ "date": "2026-11-20T14:00:30",
+ "commit": "d92d2100ef617130dea2ecd228c1f2c14552aa25",
+ "uncommitted_py_changes": [],
+ "config": "30dfb45213",
+ "results": "results_kinematics.jsonl",
+ "jobs_file": "baseline_jobs.json",
+ "q_dir": "q_tables",
+ "job_ids": [
+  "robustness|L1|ov0|w0|s67|ep40000|fs0|r210|q_learning|nolabel",
+  "robustness|L1|ov0|w0|s123|ep40000|fs0|r210|q_learning|nolabel",
+  "robustness|L1|ov0|w0|s42|ep40000|fs0|r210|q_learning|nolabel",
+  "robustness|L1|ov0|w0|s7|ep40000|fs0|r210|q_learning|nolabel",
+  "robustness|L1|ov0|w0|s99|ep40000|fs0|r210|q_learning|nolabel"
+ ],
+ "workers": 5,
+ "wall_s": 13888.111914699999,
+ "settings": {
+  "episodes": 40000,
+  "ALPHA": 0.1,
+  "GAMMA": 0.995,
+  "EPS_END": 0.05,
+  "REWARD_SCALE": 0.001,
+  "EXPLORE_PROB": 0.5,
+  "METHOD": "q_learning",
+  "eval_every": 1000,
+  "eval_seed_start": 1000,
+  "eval_seeds": 20,
+  "test_seed_start": 5000,
+  "test_seeds": 50,
+  "R1": 3.0,
+  "R2": 10.0,
+  "FIRST_STAGE": 0,
+  "H_BINS": [
+   0.0
+  ]
+ },
+ "python": "3.13.9",
+ "machine": "Intel64 Family 6 Model 170 Stepping 4, GenuineIntel"
+}
